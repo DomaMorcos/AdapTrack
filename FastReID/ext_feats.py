@@ -6,65 +6,60 @@ import argparse
 import numpy as np
 from fastreid.emb_computer import EmbeddingComputer
 
+
 def make_parser():
-    parser = argparse.ArgumentParser("Track - Feature Extraction")
+    # Initialization
+    parser = argparse.ArgumentParser("Track")
+
     # Data args
-    parser.add_argument("--dataset", type=str, default="mot20", help="Dataset name (e.g., mot20)")
-    parser.add_argument("--pickle_path", type=str, required=True, help="Path to detection pickle file from detect.py")
-    parser.add_argument("--output_path", type=str, required=True, help="Path to save detections with features")
-    parser.add_argument("--data_path", type=str, required=True, help="Path to image sequence (e.g., /kaggle/input/mot20fawry/tracking/test/01/img1)")
+    parser.add_argument("--dataset", type=str, default="mot17")
+    parser.add_argument("--pickle_path", type=str, default="../outputs/1. det/MOT17_val.pickle")
+    parser.add_argument("--output_path", type=str, default="../outputs/2. det_feat/MOT17_val.pickle")
+    parser.add_argument("--data_path", type=str, default="../../dataset/MOT17/train/")
+
     # Else
-    parser.add_argument("--seed", type=int, default=10000, help="Random seed for reproducibility")
+    parser.add_argument("--seed", type=float, default=10000)
+
     return parser
 
-def main(args):
+
+if __name__ == "__main__":
+    # Get arguments
+    args = make_parser().parse_args()
+
     # Set random seeds
     random.seed(args.seed)
     np.random.seed(args.seed)
     os.environ["PYTHONHASHSEED"] = str(args.seed)
 
-    # Initialize embedding computer (no weights argument)
+    # Get encoder
     embedder = EmbeddingComputer(dataset=args.dataset)
 
-    # Read detection pickle file
+    # Read detection
     with open(args.pickle_path, 'rb') as f:
         detections = pickle.load(f)
 
     # Feature extraction
-    updated_detections = {}
-    for frame_id in detections.keys():
-        # Skip if no detections
-        if detections[frame_id].shape[0] == 0:
-            updated_detections[frame_id] = detections[frame_id]
-            continue
+    for vid_name in detections.keys():
+        for frame_id in detections[vid_name].keys():
+            # If there is no detection
+            if detections[vid_name][frame_id] is None:
+                continue
 
-        # Read image (adjusted for Kaggle path, assuming 6-digit frame IDs)
-        img_path = os.path.join(args.data_path, f"{frame_id:06d}.jpg")
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"Warning: Failed to load {img_path}")
-            updated_detections[frame_id] = detections[frame_id]  # Keep as-is if image fails
-            continue
+            # Read image
+            img = cv2.imread(args.data_path + vid_name + '/img1/%06d.jpg' % frame_id)
 
-        # Get detections for this frame
-        detection = detections[frame_id]  # [N, 5] array: [x1, y1, x2, y2, conf]
+            # Get detection
+            detection = detections[vid_name][frame_id]
 
-        # Compute embeddings
-        embedding = embedder.compute_embedding(img, detection[:, :4])  # Pass [x1, y1, x2, y2]
-        updated_dets = np.concatenate([detection, embedding], axis=1)  # [x1, y1, x2, y2, conf, embedding]
+            # Get features
+            if detection is not None:
+                embedding = embedder.compute_embedding(img, detection[:, :4])
+                detections[vid_name][frame_id] = np.concatenate([detection, embedding], axis=1)
 
-        # Store updated detections
-        updated_detections[frame_id] = updated_dets
+            # Logging
+            print(vid_name, frame_id, flush=True)
 
-        # Logging
-        print(f"Processed frame {frame_id}", flush=True)
-
-    # Save updated detections
-    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
-    with open(args.output_path, 'wb') as f:
-        pickle.dump(updated_detections, f, protocol=pickle.HIGHEST_PROTOCOL)
-    print(f"Detections with features saved to {args.output_path}")
-
-if __name__ == "__main__":
-    args = make_parser().parse_args()
-    main(args)
+    # Save
+    with open(args.output_path, 'wb') as handle:
+        pickle.dump(detections, handle, protocol=pickle.HIGHEST_PROTOCOL)
