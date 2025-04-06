@@ -1,14 +1,16 @@
-from opts import opt
 from trackers.cmc import *
 from trackers import metrics
 from trackers.units import Track
 from trackers import linear_assignment
 
-
 class Tracker:
-    def __init__(self, metric, vid_name):
+    def __init__(self, metric, vid_name, max_age=50, max_distance=0.45, max_iou_distance=0.70, conf_thresh=0.4):
         # Set parameters
         self.metric = metric
+        self.max_age = max_age  # Added
+        self.max_distance = max_distance  # Added
+        self.max_iou_distance = max_iou_distance  # Added
+        self.conf_thresh = conf_thresh  # Added
 
         # Initialization
         self.tracks = []
@@ -49,18 +51,15 @@ class Tracker:
 
         return cost_matrix, cost_matrix_min, cost_matrix_max
 
-    # Match
     def match(self, detections):
         # Split tracks into confirmed and unconfirmed tracks
         confirmed_tracks = [i for i, t in enumerate(self.tracks) if t.is_confirmed()]
         unconfirmed_tracks = [i for i, t in enumerate(self.tracks) if not t.is_confirmed()]
 
         # Associate confirmed tracks and high-confident detections using appearance features
-        # Give [self.gated_metric, metrics.iou_constraint, True] to turn on adap thresholding
-        # Give [self.gated_metric, metrics.iou_constraint, False] to turn off adap thresholding
         matches_a, _, unmatched_detections = \
             linear_assignment.min_cost_matching([self.gated_metric, metrics.iou_constraint, True],
-                                                opt.max_distance, self.tracks,
+                                                self.max_distance, self.tracks,
                                                 detections, confirmed_tracks)
 
         # Gather unmatched tracks
@@ -71,10 +70,8 @@ class Tracker:
         unmatched_tracks_a = [k for k in unmatched_tracks_a if self.tracks[k].time_since_update != 1]
 
         # Associate (remaining tracks + unconfirmed tracks) and remaining detections using IoU
-        # Give [metrics.iou_cost, None, True] to turn on adap thresholding
-        # Give [metrics.iou_cost, None, False] to turn off adap thresholding
         matches_b, unmatched_tracks_b, unmatched_detections = \
-            linear_assignment.min_cost_matching([metrics.iou_cost, None, True], opt.max_iou_distance, self.tracks,
+            linear_assignment.min_cost_matching([metrics.iou_cost, None, True], self.max_iou_distance, self.tracks,
                                                 detections, candidates, unmatched_detections)
 
         # Update
@@ -93,7 +90,7 @@ class Tracker:
         for track_idx in unmatched_tracks:
             self.tracks[track_idx].mark_missed()
         for detection_idx in unmatched_detections:
-            if detections[detection_idx].confidence >= opt.conf_thresh:
+            if detections[detection_idx].confidence >= self.conf_thresh:
                 self.initiate_track(detections[detection_idx])
 
         # Delete tracks
