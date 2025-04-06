@@ -6,7 +6,6 @@ import argparse
 import numpy as np
 import json
 
-# Abstract ReID interface
 class ReIDExtractor:
     def __init__(self, model_path, config=None):
         self.model_path = model_path
@@ -26,7 +25,7 @@ class FastReIDExtractor(ReIDExtractor):
     """Implementation using your EmbeddingComputer."""
     def __init__(self, model_path, config=None):
         super().__init__(model_path, config)
-        from emb_computer import EmbeddingComputer  # Local import
+        from fastreid.emb_computer import EmbeddingComputer  # Correct import from subdirectory
         self.embedder = EmbeddingComputer(dataset=config.get("dataset", "generic"), 
                                          path=model_path)
 
@@ -39,10 +38,10 @@ def make_parser():
     parser.add_argument("--output_path", type=str, required=True, help="Path to save detections with features")
     parser.add_argument("--image_dir", type=str, required=True, help="Directory with images (e.g., 000001.jpg)")
     parser.add_argument("--reid_model", type=str, default="/kaggle/working/AdapTrack/FastReID/weights/mot17_sbs_S50.pth", help="Path to ReID model weights")
-    parser.add_argument("--reid_class", type=str, default="FastReIDExtractor", help="ReID extractor class (e.g., FastReIDExtractor)")
-    parser.add_argument("--reid_config", type=str, default='{"dataset": "mot17"}', help="JSON config for ReID (e.g., '{\"dataset\": \"mot17\"}')")
+    parser.add_argument("--reid_class", type=str, default="FastReIDExtractor", help="ReID extractor class")
+    parser.add_argument("--reid_config", type=str, default='{"dataset": "mot17"}', help="JSON config for ReID")
     parser.add_argument("--image_ext", type=str, default=".jpg", help="Image file extension")
-    parser.add_argument("--frame_padding", type=int, default=6, help="Zero-padding for frame IDs (e.g., 6 for 000001)")
+    parser.add_argument("--frame_padding", type=int, default=6, help="Zero-padding for frame IDs")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
     return parser
 
@@ -53,7 +52,7 @@ def main(args):
 
     # Load ReID extractor
     reid_config = json.loads(args.reid_config)
-    reid_class = globals()[args.reid_class]  # Assumes class is in this file
+    reid_class = globals()[args.reid_class]
     embedder = reid_class(model_path=args.reid_model, config=reid_config)
     print(f"Using ReID model: {args.reid_model} with class {args.reid_class}")
 
