@@ -1,13 +1,16 @@
 import numpy as np
+import os
 
 class CMC:
     def __init__(self, vid_name):
         super(CMC, self).__init__()
-        self.gmc_path = f'./trackers/cmc/GMC-{vid_name}.txt'
+        # Use absolute path instead of relative
+        base_dir = "/kaggle/working/AdapTrack/AdapTrack"  # Adjust if your base dir differs
+        self.gmc_path = os.path.join(base_dir, "trackers", "cmc", f"GMC-{vid_name}.txt")
+        print(f"Looking for GMC file at: {self.gmc_path}")  # Debug path
         try:
             self.gmcFile = open(self.gmc_path, 'r')
             self.frame_map = {}
-            # Pre-read all lines to map frame IDs to warp matrices
             for line in self.gmcFile:
                 tokens = line.strip().split("\t")
                 if len(tokens) >= 7:
@@ -33,7 +36,7 @@ class CMC:
     def get_warp_matrix(self, frame_id=None):
         if self.gmcFile is None or not self.frame_map:
             return np.eye(2, 3, dtype=np.float32)
-        return self.frame_map.get(frame_id, np.eye(2, 3, dtype=np.float32))  # Fallback to identity if frame_id not found
+        return self.frame_map.get(frame_id, np.eye(2, 3, dtype=np.float32))
 
     def __del__(self):
         if self.gmcFile is not None and not self.gmcFile.closed:
