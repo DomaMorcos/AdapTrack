@@ -79,7 +79,7 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed(opt.seed)
 
-    opt.max_age = opt.frame_rate * 2  # Override opts.py's default
+    opt.max_age = opt.frame_rate * 2  # Override default
 
     if opt.AFLink:
         model = PostLinker()
