@@ -36,7 +36,7 @@ def create_detections(det_feat, conf_thresh):
         print("Debug: No detections in frame")
         return detections
     for row in det_feat:
-        bbox, confidence, feature = row[:4], row[4], row[5:]  # [x1, y1, x2, y2, conf, embedding...]
+        bbox, confidence, feature = row[:4], row[4], row[5:]
         if confidence < conf_thresh:
             continue
         detections.append(Detection(bbox, confidence, feature))
