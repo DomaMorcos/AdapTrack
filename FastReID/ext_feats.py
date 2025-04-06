@@ -5,6 +5,9 @@ import random
 import argparse
 import numpy as np
 import json
+import torch
+import torch.nn as nn
+import torchreid
 
 class ReIDExtractor:
     def __init__(self, model_path, config=None):
@@ -25,21 +28,84 @@ class FastReIDExtractor(ReIDExtractor):
     """Implementation using your EmbeddingComputer."""
     def __init__(self, model_path, config=None):
         super().__init__(model_path, config)
-        from fastreid.emb_computer import EmbeddingComputer  # Correct import from subdirectory
+        from fastreid.emb_computer import EmbeddingComputer
         self.embedder = EmbeddingComputer(dataset=config.get("dataset", "generic"), 
-                                         path=model_path)
+                                        path=model_path)
 
     def compute_embedding(self, image, boxes):
         return self.embedder.compute_embedding(image, boxes)
+
+class OSNetExtractor(ReIDExtractor):
+    """Implementation using OSNet model."""
+    def __init__(self, model_path, config=None):
+        super().__init__(model_path, config)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = OSNetReID(embedding_dim=config.get("embedding_dim", 256))
+        if model_path and os.path.exists(model_path):
+            self.model.load_state_dict(torch.load(model_path))
+        self.model = self.model.to(self.device)
+        self.model.eval()
+        self.crop_size = (128, 384)  # Standard size for person ReID
+
+    def compute_embedding(self, image, boxes):
+        # Convert boxes to integer and clip to image boundaries
+        h, w = image.shape[:2]
+        boxes = np.round(boxes).astype(np.int32)
+        boxes[:, 0] = boxes[:, 0].clip(0, w)
+        boxes[:, 1] = boxes[:, 1].clip(0, h)
+        boxes[:, 2] = boxes[:, 2].clip(0, w)
+        boxes[:, 3] = boxes[:, 3].clip(0, h)
+
+        # Extract and preprocess crops
+        crops = []
+        for box in boxes:
+            crop = image[box[1]:box[3], box[0]:box[2]]
+            crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+            crop = cv2.resize(crop, self.crop_size, interpolation=cv2.INTER_LINEAR)
+            crop = crop.astype(np.float32) / 255.0
+            crop = torch.from_numpy(crop.transpose(2, 0, 1)).unsqueeze(0)
+            crops.append(crop)
+
+        if not crops:
+            return np.zeros((0, 256))
+
+        # Process in batch
+        batch = torch.cat(crops, dim=0).to(self.device)
+        with torch.no_grad():
+            embeddings = self.model(batch)
+        
+        return embeddings.cpu().numpy()
+
+class OSNetReID(nn.Module):
+    def __init__(self, embedding_dim=256):
+        super(OSNetReID, self).__init__()
+        self.model = torchreid.models.build_model(
+            name='osnet_ain_x1_0',
+            num_classes=1000,
+            pretrained=True
+        )
+        self.model.classifier = nn.Identity()
+        
+        # Freeze all except conv5 + fc
+        for name, param in self.model.named_parameters():
+            if 'conv4' not in name:
+                param.requires_grad = False
+        
+        self.fc = nn.Linear(512, embedding_dim)
+    
+    def forward(self, x):
+        x = self.model(x)
+        x = self.fc(x)
+        return nn.functional.normalize(x, p=2, dim=1)
 
 def make_parser():
     parser = argparse.ArgumentParser("General Feature Extraction")
     parser.add_argument("--pickle_path", type=str, required=True, help="Path to detection pickle file")
     parser.add_argument("--output_path", type=str, required=True, help="Path to save detections with features")
     parser.add_argument("--image_dir", type=str, required=True, help="Directory with images (e.g., 000001.jpg)")
-    parser.add_argument("--reid_model", type=str, default="/kaggle/working/AdapTrack/FastReID/weights/mot17_sbs_S50.pth", help="Path to ReID model weights")
-    parser.add_argument("--reid_class", type=str, default="FastReIDExtractor", help="ReID extractor class")
-    parser.add_argument("--reid_config", type=str, default='{"dataset": "mot17"}', help="JSON config for ReID")
+    parser.add_argument("--reid_model", type=str, default=None, help="Path to ReID model weights")
+    parser.add_argument("--reid_class", type=str, default="OSNetExtractor", help="ReID extractor class")
+    parser.add_argument("--reid_config", type=str, default='{"dataset": "mot17", "embedding_dim": 256}', help="JSON config for ReID")
     parser.add_argument("--image_ext", type=str, default=".jpg", help="Image file extension")
     parser.add_argument("--frame_padding", type=int, default=6, help="Zero-padding for frame IDs")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
