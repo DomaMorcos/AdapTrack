@@ -1,4 +1,3 @@
-%%writefile /kaggle/working/AdapTrack/AdapTrack/track_updated.py
 import os
 import torch
 import random
