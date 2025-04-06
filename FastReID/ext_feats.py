@@ -13,6 +13,9 @@ def make_parser():
     parser.add_argument("--pickle_path", type=str, required=True, help="Path to detection pickle file from detect.py")
     parser.add_argument("--output_path", type=str, required=True, help="Path to save detections with features")
     parser.add_argument("--data_path", type=str, required=True, help="Path to image sequence (e.g., /kaggle/input/mot20fawry/tracking/test/01/img1)")
+    # Model args
+    parser.add_argument("--config_file", type=str, default="configs/mot17/sbs_S50.yml", help="Path to FastReID config file")
+    parser.add_argument("--weights_path", type=str, default="weights/mot17_sbs_S50.pth", help="Path to FastReID weights")
     # Else
     parser.add_argument("--seed", type=int, default=10000, help="Random seed for reproducibility")
     return parser
@@ -23,8 +26,12 @@ def main(args):
     np.random.seed(args.seed)
     os.environ["PYTHONHASHSEED"] = str(args.seed)
 
-    # Initialize embedding computer (no weights argument)
-    embedder = EmbeddingComputer(dataset=args.dataset)
+    # Print paths for debugging
+    print(f"Using config file: {args.config_file}")
+    print(f"Using weights: {args.weights_path}")
+
+    # Initialize embedding computer with explicit config and weights
+    embedder = EmbeddingComputer(dataset=args.dataset, weights_path=args.weights_path, config_path=args.config_file)
 
     # Read detection pickle file
     with open(args.pickle_path, 'rb') as f:
