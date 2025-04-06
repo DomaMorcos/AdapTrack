@@ -13,7 +13,6 @@ def make_parser():
     parser.add_argument("--pickle_path", type=str, required=True, help="Path to detection pickle file from detect.py")
     parser.add_argument("--output_path", type=str, required=True, help="Path to save detections with features")
     parser.add_argument("--data_path", type=str, required=True, help="Path to image sequence (e.g., /kaggle/input/mot20fawry/tracking/test/01/img1)")
-    parser.add_argument("--reid_weights", type=str, default="./weights/mot20_sbs_S50.pth", help="Path to ReID model weights")
     # Else
     parser.add_argument("--seed", type=int, default=10000, help="Random seed for reproducibility")
     return parser
@@ -24,9 +23,8 @@ def main(args):
     np.random.seed(args.seed)
     os.environ["PYTHONHASHSEED"] = str(args.seed)
 
-    # Initialize embedding computer with weights
-    # Note: EmbeddingComputer may not directly accept 'weights'; adjust if needed based on its API
-    embedder = EmbeddingComputer(dataset=args.dataset, weights=args.reid_weights)
+    # Initialize embedding computer (no weights argument)
+    embedder = EmbeddingComputer(dataset=args.dataset)
 
     # Read detection pickle file
     with open(args.pickle_path, 'rb') as f:
