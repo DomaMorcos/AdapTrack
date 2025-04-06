@@ -24,7 +24,8 @@ def main(args):
     np.random.seed(args.seed)
     os.environ["PYTHONHASHSEED"] = str(args.seed)
 
-    # Initialize embedding computer
+    # Initialize embedding computer with weights
+    # Note: EmbeddingComputer may not directly accept 'weights'; adjust if needed based on its API
     embedder = EmbeddingComputer(dataset=args.dataset, weights=args.reid_weights)
 
     # Read detection pickle file
