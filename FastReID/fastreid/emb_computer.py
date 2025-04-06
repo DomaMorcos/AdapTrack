@@ -3,21 +3,18 @@ import torch
 import numpy as np
 from fastreid.fastreid_adaptor import FastReID
 
-
 class EmbeddingComputer:
-    def __init__(self, dataset, max_batch=1024):
+    def __init__(self, dataset, path=None, max_batch=1024):
         self.model = None
         self.dataset = dataset
         self.crop_size = (128, 384)
         self.max_batch = max_batch
+        self.weights_path = path if path is not None else "weights/%s_sbs_S50.pth" % self.dataset
 
     def initialize_model(self):
-        # Set path
-        path = "weights/%s_sbs_S50.pth" % self.dataset
-
-        # Set model
-        print('Pre-trained weight: %s' % path)
-        self.model = FastReID(self.dataset, path)
+        # Use the provided or default weights path
+        print('Pre-trained weight: %s' % self.weights_path)
+        self.model = FastReID(self.dataset, self.weights_path)
 
     def compute_embedding(self, img, bbox):
         # Initialization
