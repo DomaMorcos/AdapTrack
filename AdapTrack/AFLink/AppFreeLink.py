@@ -3,9 +3,7 @@ import numpy as np
 from collections import defaultdict
 from scipy.optimize import linear_sum_assignment
 
-
 INFINITY = 1e5
-
 
 class AFLink:
     def __init__(self, path_in, path_out, model, dataset, thrT: tuple, thrS: int, thrP: float):
@@ -102,5 +100,5 @@ class AFLink:
         res = self.deduplicate(res)
 
         start = time.time()
-        np.savetxt(self.path_out, res, fmt='%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d')
+        np.savetxt(self.path_out, res, fmt='%d,%d,%.2f,%.2f,%.2f,%.2f,%.2f')  # Updated to 7 columns
         return time.time() - start

@@ -53,7 +53,7 @@ def run_tracker(sequence_name, det_feat, output_path, args):
 
     for frame_idx in sorted(det_feat.keys()):
         detections = create_detections(det_feat[frame_idx], args.conf_thresh)
-        tracker.camera_update(frame_idx)  # Pass frame_idx to align with GMC
+        tracker.camera_update(frame_idx)
         tracker.predict()
         tracker.update(detections)
 
