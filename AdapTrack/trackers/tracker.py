@@ -27,8 +27,8 @@ class Tracker:
         for track in self.tracks:
             track.predict()
 
-    def camera_update(self):
-        warp_matrix = self.cmc.get_warp_matrix()
+    def camera_update(self, frame_id=None):
+        warp_matrix = self.cmc.get_warp_matrix(frame_id)
         for track in self.tracks:
             apply_cmc(track, warp_matrix)
 
