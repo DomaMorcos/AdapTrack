@@ -25,6 +25,8 @@ def make_parser():
     parser.add_argument("--max_aspect_ratio", type=float, default=1.6, help="Maximum width/height ratio")
     parser.add_argument("--max_distance", type=float, default=0.45, help="Max distance for appearance matching")
     parser.add_argument("--max_iou_distance", type=float, default=0.70, help="Max IoU distance for matching")
+    parser.add_argument("--min_len", type=int, default=3, help="Minimum hits to confirm track")
+    parser.add_argument("--ema_beta", type=float, default=0.9, help="EMA smoothing factor")
     parser.add_argument("--post_process", nargs="*", default=[], help="Post-processors (e.g., aflink interpolation)")
     parser.add_argument("--aflink_weights", type=str, default="/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", help="Path to AFLink weights")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
@@ -46,7 +48,7 @@ def run_tracker(sequence_name, det_feat, output_path, args):
     metric = metrics.NearestNeighborDistanceMetric()
     tracker = Tracker(metric, sequence_name, max_age=int(args.frame_rate * 2), 
                       max_distance=args.max_distance, max_iou_distance=args.max_iou_distance, 
-                      conf_thresh=args.conf_thresh)
+                      conf_thresh=args.conf_thresh, min_len=args.min_len, ema_beta=args.ema_beta)
     results = []
 
     for frame_idx in sorted(det_feat.keys()):
