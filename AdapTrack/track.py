@@ -29,6 +29,10 @@ def make_parser():
     parser.add_argument("--ema_beta", type=float, default=0.9, help="EMA smoothing factor")
     parser.add_argument("--post_process", nargs="*", default=[], help="Post-processors (e.g., aflink interpolation)")
     parser.add_argument("--aflink_weights", type=str, default="/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", help="Path to AFLink weights")
+    parser.add_argument("--aflink_thrT_min", type=int, default=0, help="Min time gap for AFLink linking")
+    parser.add_argument("--aflink_thrT_max", type=int, default=30, help="Max time gap for AFLink linking")
+    parser.add_argument("--aflink_thrS", type=int, default=75, help="Spatial threshold for AFLink")
+    parser.add_argument("--aflink_thrP", type=float, default=0.05, help="Probability threshold for AFLink")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
     return parser
 
@@ -82,7 +86,7 @@ def apply_post_processing(output_path, post_processors, args):
         model.cuda()
         dataset = LinkData('', '')
         linker = AFLink(path_in=output_path, path_out=output_path, model=model, dataset=dataset,
-                        thrT=(0, 30), thrS=75, thrP=0.05)
+                        thrT=(args.aflink_thrT_min, args.aflink_thrT_max), thrS=args.aflink_thrS, thrP=args.aflink_thrP)
         sub_time += linker.link()
         print(f"AFLink post-processing completed")
 
