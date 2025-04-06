@@ -113,7 +113,7 @@ def main():
     total_time = (time.time() - start_time) - sub_time
     time_per_img = total_time / img_num
     print(f"Time per image: {time_per_img:.4f} sec, FPS: {1 / time_per_img:.2f}", flush=True)
-
+# UPDATED
 if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     main()
