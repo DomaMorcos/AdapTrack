@@ -5,7 +5,7 @@ import pickle
 import argparse
 import numpy as np
 import cv2
-from detectors import YoloDetector, EnsembleDetector  # Import your custom detectors
+from detectors import YoloDetector, EnsembleDetector  # Assumes detectors.py is in the same directory
 
 def make_parser():
     parser = argparse.ArgumentParser("Custom YOLO Ensemble Detection for MOT")
@@ -18,6 +18,7 @@ def make_parser():
     parser.add_argument("--model2_path", type=str, required=True, help="Path to second YOLOv12 model weights")
     parser.add_argument("--model2_weight", type=float, default=0.7, help="Weight for second model in ensemble")
     parser.add_argument("--iou_thresh", type=float, default=0.6, help="IoU threshold for WBF")
+    parser.add_argument("--conf_thresh", type=float, default=0.3, help="Confidence threshold for detections post-WBF")  # Added
     parser.add_argument("--exp_name", type=str, default="detections.pickle", help="Output pickle file name")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed for reproducibility")
     parser.add_argument("--fp16", action="store_true", help="Use FP16 precision")
@@ -49,7 +50,7 @@ def main(args):
     # Initialize detectors and ensemble
     model1 = YoloDetector(args.model1_path)
     model2 = YoloDetector(args.model2_path)
-    detector = EnsembleDetector(model1, model2, args.model1_weight, args.model2_weight, args.iou_thresh)
+    detector = EnsembleDetector(model1, model2, args.model1_weight, args.model2_weight, args.iou_thresh, args.conf_thresh)  # Pass conf_thresh
     if torch.cuda.is_available():
         torch.cuda.set_device(0)  # Use first GPU
 

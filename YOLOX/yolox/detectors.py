@@ -7,15 +7,11 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import numpy as np
 import cv2
-from ensemble_boxes import weighted_boxes_fusion 
-
-
+from ensemble_boxes import weighted_boxes_fusion
 
 from torchvision.models.detection import FasterRCNN
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-
-
 
 from abc import ABC, abstractmethod
 
@@ -38,10 +34,6 @@ class YoloDetector(Detector):
                 annotations.append(xyxy + [conf])
         return torch.tensor(annotations, dtype=torch.float32) if annotations else torch.zeros((0, 5), dtype=torch.float32)
 
-# EnsembleDetector remains unchanged as it assumes original resolution inputs
-    
-
-# Faster R-CNN Detector (removed conf_threshold)
 class FasterRCNNDetector:
     def __init__(self, model_path):
         anchor_sizes = tuple((int(w),) for w, _ in [(8, 8), (16, 16), (32, 32), (64, 64), (128, 128)])
@@ -113,16 +105,14 @@ class FasterRCNNDetector:
         
         return annotations
 
-
-
-# In detectors.py
 class EnsembleDetector(Detector):
-    def __init__(self, model1: Detector, model2: Detector, model1_weight=0.7, model2_weight=0.3, iou_thresh=0.6):
+    def __init__(self, model1: Detector, model2: Detector, model1_weight=0.7, model2_weight=0.3, iou_thresh=0.6, conf_thresh=0.3):
         self.model1 = model1
         self.model2 = model2
         self.model1_weight = model1_weight
         self.model2_weight = model2_weight
         self.iou_thresh = iou_thresh
+        self.conf_thresh = conf_thresh  # Added confidence threshold
 
     def __call__(self, img):
         orig_h, orig_w = img.shape[:2]
@@ -162,10 +152,13 @@ class EnsembleDetector(Detector):
             boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.0
         )
 
-        # Filter to only 'person' (class 0) after WBF
+        # Filter to only 'person' (class 0) after WBF and apply confidence threshold
         person_mask = labels == 0
         boxes = boxes[person_mask]
         scores = scores[person_mask]
+        conf_mask = scores > self.conf_thresh  # Apply confidence threshold
+        boxes = boxes[conf_mask]
+        scores = scores[conf_mask]
 
         # Scale back to original resolution
         if len(boxes) > 0:
