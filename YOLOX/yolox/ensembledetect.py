@@ -14,13 +14,13 @@ def make_parser():
     parser.add_argument("--dataset_path", type=str, required=True, help="Path to image sequence (e.g., MOT20 test/01/img1)")
     parser.add_argument("--frame_rate", type=int, default=25, help="Frame rate of the sequence")
     parser.add_argument("--model1_path", type=str, required=True, help="Path to first YOLOv12 model weights")
-    parser.add_argument("--model1_weight", type=float, default=0.7, help="Weight for first model in ensemble")  # Increased
+    parser.add_argument("--model1_weight", type=float, default=0.5, help="Weight for first model in ensemble")  # Equal weighting
     parser.add_argument("--model2_path", type=str, required=True, help="Path to second YOLOv12 model weights")
-    parser.add_argument("--model2_weight", type=float, default=0.3, help="Weight for second model in ensemble")  # Decreased
-    parser.add_argument("--iou_thresh", type=float, default=0.3, help="IoU threshold for WBF")  # Lowered
-    parser.add_argument("--conf_thresh", type=float, default=0.05, help="Confidence threshold for detections post-WBF")  # Lowered
-    parser.add_argument("--min_area", type=float, default=25, help="Minimum box area")  # Lowered
-    parser.add_argument("--max_aspect_ratio", type=float, default=3.0, help="Maximum width/height ratio")  # Increased
+    parser.add_argument("--model2_weight", type=float, default=0.5, help="Weight for second model in ensemble")  # Equal weighting
+    parser.add_argument("--iou_thresh", type=float, default=0.6, help="IoU threshold for WBF")  # BoostTrack++ value
+    parser.add_argument("--conf_thresh", type=float, default=0.3, help="Confidence threshold for detections post-WBF")  # BoostTrack++ value
+    parser.add_argument("--min_area", type=float, default=10, help="Minimum box area")  # Lowered
+    parser.add_argument("--max_aspect_ratio", type=float, default=5.0, help="Maximum width/height ratio")  # Increased
     parser.add_argument("--exp_name", type=str, default="detections.pickle", help="Output pickle file name")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed for reproducibility")
     parser.add_argument("--fp16", action="store_true", help="Use FP16 precision")
@@ -67,9 +67,10 @@ def filter_detections(dets, min_area, max_aspect_ratio):
     areas = widths * heights
     aspect_ratios = widths / heights
     mask = (areas >= min_area) & (aspect_ratios <= max_aspect_ratio) & (1 / aspect_ratios <= max_aspect_ratio)
+    print(f"Filtering: {len(dets)} detections before, {np.sum(mask)} detections after")
     return dets[mask]
 
-def boost_confidence(dets, prev_dets, iou_threshold=0.3, boost_coef=0.5, det_thresh=0.05):  # Aligned with conf_thresh
+def boost_confidence(dets, prev_dets, iou_threshold=0.2, boost_coef=0.5, det_thresh=0.3):  # Aligned with conf_thresh
     """Boost confidence of detections that have high IoU with detections in the previous frame."""
     if dets.shape[0] == 0 or prev_dets.shape[0] == 0:
         return dets
@@ -78,6 +79,29 @@ def boost_confidence(dets, prev_dets, iou_threshold=0.3, boost_coef=0.5, det_thr
     boost_mask = (max_iou > iou_threshold) & (dets[:, 4] < det_thresh)
     dets[boost_mask, 4] = np.maximum(dets[boost_mask, 4], max_iou[boost_mask] * boost_coef)
     return dets
+
+def visualize_detections(img, dets, output_path, stage):
+    """Draw bounding boxes on the image and save it."""
+    img_copy = img.copy()
+    if dets.shape[0] == 0:
+        print(f"No detections to visualize for {stage}")
+        return
+    
+    # Color coding: Red for WBF, Green for Boosting, Blue for Filtering
+    color = {
+        "wbf": (0, 0, 255),      # Red
+        "boosting": (0, 255, 0),  # Green
+        "filtering": (255, 0, 0)  # Blue
+    }[stage]
+    
+    for det in dets:
+        x1, y1, x2, y2, conf = det
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        cv2.rectangle(img_copy, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(img_copy, f"{conf:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
+    cv2.imwrite(output_path, img_copy)
+    print(f"Saved visualization for {stage} at {output_path}")
 
 def main(args):
     # Set random seed for reproducibility
@@ -98,9 +122,11 @@ def main(args):
     if torch.cuda.is_available():
         torch.cuda.set_device(0)
 
-    # Prepare output directory
+    # Prepare output directory for detections and visualizations
     output_dir = os.path.join(args.output_folder, args.dataset_name, "det")
+    viz_dir = os.path.join(output_dir, "viz")
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(viz_dir, exist_ok=True)
     output_path = os.path.join(output_dir, args.exp_name)
 
     # Process sequence and collect detections
@@ -120,8 +146,20 @@ def main(args):
         if preds.shape[0] > 0:
             dets = preds.cpu().numpy()
             print(f"Frame {frame_id}: {len(dets)} detections after WBF")
-            dets = boost_confidence(dets, prev_dets, iou_threshold=0.3, boost_coef=0.5, det_thresh=args.conf_thresh)
+            
+            # Visualize after WBF (every 50 frames)
+            if frame_id % 50 == 0:
+                viz_path = os.path.join(viz_dir, f"frame_{frame_id}_wbf.jpg")
+                visualize_detections(img, dets, viz_path, "wbf")
+            
+            dets = boost_confidence(dets, prev_dets, iou_threshold=0.2, boost_coef=0.5, det_thresh=args.conf_thresh)
             print(f"Frame {frame_id}: {len(dets)} detections after boosting")
+            
+            # Visualize after boosting (every 50 frames)
+            if frame_id % 50 == 0:
+                viz_path = os.path.join(viz_dir, f"frame_{frame_id}_boosting.jpg")
+                visualize_detections(img, dets, viz_path, "boosting")
+            
             dets = filter_detections(dets, args.min_area, args.max_aspect_ratio)
             prev_dets = dets
         else:
@@ -130,6 +168,11 @@ def main(args):
         
         det_results[frame_id] = dets
         print(f"Frame {frame_id}: {len(dets)} detections after filtering")
+        
+        # Visualize after filtering (every 50 frames)
+        if frame_id % 50 == 0:
+            viz_path = os.path.join(viz_dir, f"frame_{frame_id}_filtering.jpg")
+            visualize_detections(img, dets, viz_path, "filtering")
 
     # Sort det_results by frame_id to ensure order
     det_results = dict(sorted(det_results.items()))
