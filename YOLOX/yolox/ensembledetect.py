@@ -14,13 +14,13 @@ def make_parser():
     parser.add_argument("--dataset_path", type=str, required=True, help="Path to image sequence (e.g., MOT20 test/01/img1)")
     parser.add_argument("--frame_rate", type=int, default=25, help="Frame rate of the sequence")
     parser.add_argument("--model1_path", type=str, required=True, help="Path to first YOLOv12 model weights")
-    parser.add_argument("--model1_weight", type=float, default=0.5, help="Weight for first model in ensemble")
+    parser.add_argument("--model1_weight", type=float, default=0.7, help="Weight for first model in ensemble")  # Increased
     parser.add_argument("--model2_path", type=str, required=True, help="Path to second YOLOv12 model weights")
-    parser.add_argument("--model2_weight", type=float, default=0.5, help="Weight for second model in ensemble")
-    parser.add_argument("--iou_thresh", type=float, default=0.6, help="IoU threshold for WBF")
-    parser.add_argument("--conf_thresh", type=float, default=0.3, help="Confidence threshold for detections post-WBF")  # Lowered
-    parser.add_argument("--min_area", type=float, default=50, help="Minimum box area")  # Lowered
-    parser.add_argument("--max_aspect_ratio", type=float, default=2.0, help="Maximum width/height ratio")  # Increased
+    parser.add_argument("--model2_weight", type=float, default=0.3, help="Weight for second model in ensemble")  # Decreased
+    parser.add_argument("--iou_thresh", type=float, default=0.3, help="IoU threshold for WBF")  # Lowered
+    parser.add_argument("--conf_thresh", type=float, default=0.05, help="Confidence threshold for detections post-WBF")  # Lowered
+    parser.add_argument("--min_area", type=float, default=25, help="Minimum box area")  # Lowered
+    parser.add_argument("--max_aspect_ratio", type=float, default=3.0, help="Maximum width/height ratio")  # Increased
     parser.add_argument("--exp_name", type=str, default="detections.pickle", help="Output pickle file name")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed for reproducibility")
     parser.add_argument("--fp16", action="store_true", help="Use FP16 precision")
@@ -33,7 +33,7 @@ def load_images(dataset_path):
         img = cv2.imread(img_path)
         if img is None:
             print(f"Warning: Failed to load {img_path}")
-            yield frame_id, None  # Yield None to indicate failure
+            yield frame_id, None
             continue
         yield frame_id, img
 
@@ -69,7 +69,7 @@ def filter_detections(dets, min_area, max_aspect_ratio):
     mask = (areas >= min_area) & (aspect_ratios <= max_aspect_ratio) & (1 / aspect_ratios <= max_aspect_ratio)
     return dets[mask]
 
-def boost_confidence(dets, prev_dets, iou_threshold=0.3, boost_coef=0.5, det_thresh=0.3):
+def boost_confidence(dets, prev_dets, iou_threshold=0.3, boost_coef=0.5, det_thresh=0.05):  # Aligned with conf_thresh
     """Boost confidence of detections that have high IoU with detections in the previous frame."""
     if dets.shape[0] == 0 or prev_dets.shape[0] == 0:
         return dets
@@ -119,7 +119,9 @@ def main(args):
         
         if preds.shape[0] > 0:
             dets = preds.cpu().numpy()
+            print(f"Frame {frame_id}: {len(dets)} detections after WBF")
             dets = boost_confidence(dets, prev_dets, iou_threshold=0.3, boost_coef=0.5, det_thresh=args.conf_thresh)
+            print(f"Frame {frame_id}: {len(dets)} detections after boosting")
             dets = filter_detections(dets, args.min_area, args.max_aspect_ratio)
             prev_dets = dets
         else:
