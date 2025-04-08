@@ -42,7 +42,7 @@ class OSNetExtractor(ReIDExtractor):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = OSNetReID(embedding_dim=config.get("embedding_dim", 256))
         if model_path and os.path.exists(model_path):
-            self.model.load_state_dict(torch.load(model_path))
+            self.model.load_state_dict(torch.load(model_path, weights_only=True))  # Added weights_only=True for safety
         self.model = self.model.to(self.device)
         self.model.eval()
         self.crop_size = (128, 384)  # Standard size for person ReID
@@ -60,6 +60,8 @@ class OSNetExtractor(ReIDExtractor):
         crops = []
         for box in boxes:
             crop = image[box[1]:box[3], box[0]:box[2]]
+            if crop.size == 0:  # Skip empty crops
+                continue
             crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
             crop = cv2.resize(crop, self.crop_size, interpolation=cv2.INTER_LINEAR)
             crop = crop.astype(np.float32) / 255.0
@@ -67,14 +69,17 @@ class OSNetExtractor(ReIDExtractor):
             crops.append(crop)
 
         if not crops:
-            return np.zeros((0, 256))
+            return np.zeros((len(boxes), 256))
 
         # Process in batch
         batch = torch.cat(crops, dim=0).to(self.device)
         with torch.no_grad():
             embeddings = self.model(batch)
         
-        return embeddings.cpu().numpy()
+        # Ensure embeddings match the number of input boxes
+        emb_array = np.zeros((len(boxes), embeddings.shape[1]), dtype=np.float32)
+        emb_array[:len(crops)] = embeddings.cpu().numpy()
+        return emb_array
 
 class OSNetReID(nn.Module):
     def __init__(self, embedding_dim=256):
@@ -105,7 +110,7 @@ def make_parser():
     parser.add_argument("--image_dir", type=str, required=True, help="Directory with images (e.g., 000001.jpg)")
     parser.add_argument("--reid_model", type=str, default=None, help="Path to ReID model weights")
     parser.add_argument("--reid_class", type=str, default="OSNetExtractor", help="ReID extractor class")
-    parser.add_argument("--reid_config", type=str, default='{"dataset": "mot17", "embedding_dim": 256}', help="JSON config for ReID")
+    parser.add_argument("--reid_config", type=str, default='{"dataset": "mot20", "embedding_dim": 256}', help="JSON config for ReID")
     parser.add_argument("--image_ext", type=str, default=".jpg", help="Image file extension")
     parser.add_argument("--frame_padding", type=int, default=6, help="Zero-padding for frame IDs")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
@@ -143,6 +148,10 @@ def main(args):
 
         # Compute embeddings
         embedding = embedder.compute_embedding(img, detections[frame_id][:, :4])
+        # Ensure the embedding dimension matches the expected output
+        if embedding.shape[0] != detections[frame_id].shape[0]:
+            print(f"Warning: Embedding shape mismatch for frame {frame_id}. Expected {detections[frame_id].shape[0]} embeddings, got {embedding.shape[0]}")
+            continue
         updated_detections[frame_id] = np.concatenate([detections[frame_id], embedding], axis=1)
 
         print(f"Processed frame {frame_id}", flush=True)
