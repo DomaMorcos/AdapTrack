@@ -118,6 +118,16 @@ class FasterRCNNDetector:
 # In detectors.py
 from torchvision.ops import nms
 
+from torchvision.ops import nms
+import torch
+import numpy as np
+from ensemble_boxes import weighted_boxes_fusion
+
+from torchvision.ops import nms
+import torch
+import numpy as np
+from ensemble_boxes import weighted_boxes_fusion
+
 class EnsembleDetector(Detector):
     def __init__(self, model1: Detector, model2: Detector, model1_weight=0.6, model2_weight=0.4, iou_thresh=0.6):
         self.model1 = model1
@@ -132,6 +142,8 @@ class EnsembleDetector(Detector):
         # Get predictions
         model1_preds = self.model1(img)
         model2_preds = self.model2(img)
+        print(f"Step 1: Model 1 (YOLO) detections: {len(model1_preds)}")
+        print(f"Step 1: Model 2 (Faster R-CNN) detections: {len(model2_preds)}")
 
         # Prepare for WBF
         if len(model1_preds) > 0:
@@ -158,16 +170,18 @@ class EnsembleDetector(Detector):
         boxes_list = [yolo_boxes_normalized, other_boxes_normalized]
         scores_list = [yolo_scores, other_scores]
         labels_list = [yolo_labels, other_labels]
-        weights = [self.model1_weight, self.model2_weight]  # Fixed syntax here
+        weights = [self.model1_weight, self.model2_weight]
 
         boxes, scores, labels = weighted_boxes_fusion(
             boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.1
         )
+        print(f"Step 2: Detections after WBF: {len(boxes)}")
 
         # Filter to only 'person' (class 0) after WBF
         person_mask = labels == 0
         boxes = boxes[person_mask]
         scores = scores[person_mask]
+        print(f"Step 3: Detections after person filter: {len(boxes)}")
 
         # Apply soft NMS
         if len(boxes) > 0:
@@ -176,6 +190,7 @@ class EnsembleDetector(Detector):
             keep = nms(boxes_tensor, scores_tensor, iou_threshold=0.5)
             boxes = boxes[keep.numpy()]
             scores = scores[keep.numpy()]
+            print(f"Step 4: Detections after NMS: {len(boxes)}")
 
         # Scale back to original resolution
         if len(boxes) > 0:
