@@ -20,31 +20,29 @@ def make_parser():
     parser.add_argument("--output_dir", type=str, default="/kaggle/working/results/tracks", help="Directory to save tracking results")
     parser.add_argument("--sequence_name", type=str, default="sequence", help="Name of the sequence")
     parser.add_argument("--frame_rate", type=float, default=25.0, help="Frame rate for max_age")
-    parser.add_argument("--conf_thresh", type=float, default=0.3, help="Confidence threshold for detections")  # Lowered to match ensembledetect.py
-    parser.add_argument("--min_area", type=float, default=50, help="Minimum box area")  # Lowered to match ensembledetect.py
-    parser.add_argument("--max_aspect_ratio", type=float, default=2.0, help="Maximum width/height ratio")  # Increased to match ensembledetect.py
+    parser.add_argument("--min_area", type=float, default=10, help="Minimum box area")  # Aligned with BoostTrack++ (was 100)
+    parser.add_argument("--aspect_ratio_thresh", type=float, default=1.6, help="Aspect ratio threshold (width/height)")  # Already aligned
     parser.add_argument("--max_distance", type=float, default=0.2, help="Max distance for appearance matching")
     parser.add_argument("--max_iou_distance", type=float, default=0.85, help="Max IoU distance for matching")
-    parser.add_argument("--min_len", type=int, default=4, help="Minimum hits to confirm track")
+    parser.add_argument("--min_len", type=int, default=2, help="Minimum hits to confirm track")
     parser.add_argument("--ema_beta", type=float, default=0.92, help="EMA smoothing factor")
     parser.add_argument("--post_process", nargs="*", default=["aflink", "interpolation"], help="Post-processors (e.g., aflink interpolation)")
     parser.add_argument("--aflink_weights", type=str, default="/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", help="Path to AFLink weights")
-    parser.add_argument("--aflink_thrT_min", type=int, default=5, help="Min time gap for AFLink linking")  # Relaxed
-    parser.add_argument("--aflink_thrT_max", type=int, default=30, help="Max time gap for AFLink linking")  # Relaxed
-    parser.add_argument("--aflink_thrS", type=int, default=50, help="Spatial threshold for AFLink")  # Relaxed
-    parser.add_argument("--aflink_thrP", type=float, default=0.01, help="Probability threshold for AFLink")  # Relaxed
+    parser.add_argument("--aflink_thrT_min", type=int, default=5, help="Min time gap for AFLink linking")
+    parser.add_argument("--aflink_thrT_max", type=int, default=30, help="Max time gap for AFLink linking")
+    parser.add_argument("--aflink_thrS", type=int, default=50, help="Spatial threshold for AFLink")
+    parser.add_argument("--aflink_thrP", type=float, default=0.01, help="Probability threshold for AFLink")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
     return parser
 
-def create_detections(det_feat, conf_thresh):
+def create_detections(det_feat):
+    """Create detections without additional confidence filtering (already applied in generate_dets_feat.py)."""
     detections = []
     if det_feat is None or det_feat.shape[0] == 0:
         print("Debug: No detections in frame")
         return detections
     for row in det_feat:
         bbox, confidence, feature = row[:4], row[4], row[5:]
-        if confidence < conf_thresh:
-            continue
         detections.append(Detection(bbox, confidence, feature))
     return detections
 
@@ -52,7 +50,7 @@ def run_tracker(sequence_name, det_feat, output_path, args):
     metric = metrics.NearestNeighborDistanceMetric()
     tracker = Tracker(metric, sequence_name, max_age=int(args.frame_rate * 2), 
                       max_distance=args.max_distance, max_iou_distance=args.max_iou_distance, 
-                      conf_thresh=args.conf_thresh, min_len=args.min_len, ema_beta=args.ema_beta)
+                      min_len=args.min_len, ema_beta=args.ema_beta)
     results = []
 
     # Process all frames, even those with no detections
@@ -63,7 +61,7 @@ def run_tracker(sequence_name, det_feat, output_path, args):
             print(f"Debug: No detections in frame {frame_idx}")
             detections = []
         else:
-            detections = create_detections(det_feat[frame_idx], args.conf_thresh)
+            detections = create_detections(det_feat[frame_idx])
 
         tracker.camera_update(frame_idx)
         tracker.predict()
@@ -75,7 +73,9 @@ def run_tracker(sequence_name, det_feat, output_path, args):
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue
             bbox = track.to_tlwh()
-            if bbox[2] * bbox[3] > args.min_area and bbox[2] / bbox[3] <= args.max_aspect_ratio:
+            # Apply BoostTrack++-style filtering
+            vertical = (bbox[2] / bbox[3]) > args.aspect_ratio_thresh
+            if bbox[2] * bbox[3] > args.min_area and not vertical:
                 frame_results.append([frame_idx, track.track_id, bbox[0], bbox[1], bbox[2], bbox[3], 1.0])
 
         results.extend(frame_results)
@@ -104,7 +104,7 @@ def apply_post_processing(output_path, post_processors, args):
         print(f"AFLink post-processing completed")
 
     if "interpolation" in post_processors:
-        GBInterpolation(path_in=output_path, path_out=output_path, interval=20)  # Reduced interval for MOT20-01
+        GBInterpolation(path_in=output_path, path_out=output_path, interval=20)
         sub_time += 0.1  # Placeholder timing
         print(f"GBInterpolation post-processing completed")
 
