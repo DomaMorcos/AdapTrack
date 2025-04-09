@@ -118,7 +118,7 @@ class FasterRCNNDetector:
 # In detectors.py
 
 class EnsembleDetector(Detector):
-    def __init__(self, model1: Detector, model2: Detector, model1_weight=0.6, model2_weight=0.4, iou_thresh=0.6):
+    def __init__(self, model1: Detector, model2: Detector, model1_weight=0.7, model2_weight=0.3, iou_thresh=0.6):
         self.model1 = model1
         self.model2 = model2
         self.model1_weight = model1_weight
@@ -129,17 +129,15 @@ class EnsembleDetector(Detector):
         orig_h, orig_w = img.shape[:2]
 
         # Get predictions
-        model1_preds = self.model1(img)
+        model1_preds = self.model1(img)  # Already filtered to 'person' in YoloDetector
         model2_preds = self.model2(img)
-        print(f"Step 1: Model 1 (YOLO) detections: {len(model1_preds)}")
-        print(f"Step 1: Model 2 (Faster R-CNN) detections: {len(model2_preds)}")
 
         # Prepare for WBF
         if len(model1_preds) > 0:
             yolo_boxes = model1_preds[:, :4].numpy()
             yolo_scores = model1_preds[:, 4].numpy()
             yolo_boxes_normalized = yolo_boxes / np.array([orig_w, orig_h, orig_w, orig_h])
-            yolo_labels = np.zeros(len(yolo_scores))
+            yolo_labels = np.zeros(len(yolo_scores))  # Class 0 for 'person'
         else:
             yolo_boxes_normalized = np.array([])
             yolo_scores = np.array([])
@@ -149,37 +147,26 @@ class EnsembleDetector(Detector):
             other_boxes = model2_preds[:, :4].numpy()
             other_scores = model2_preds[:, 4].numpy()
             other_boxes_normalized = other_boxes / np.array([orig_w, orig_h, orig_w, orig_h])
-            other_labels = np.zeros(len(other_scores))
+            other_labels = np.zeros(len(other_scores))  # Class 0 for 'person'
         else:
             other_boxes_normalized = np.array([])
             other_scores = np.array([])
             other_labels = np.array([])
 
-        # Weighted Box Fusion with slight skip_box_thr
+        # Weighted Box Fusion
         boxes_list = [yolo_boxes_normalized, other_boxes_normalized]
         scores_list = [yolo_scores, other_scores]
-        labels_list = [yolo_labels, other_labels]
+        labels_list = [yolo_labels, other_labels]  # Use actual class labels
         weights = [self.model1_weight, self.model2_weight]
 
         boxes, scores, labels = weighted_boxes_fusion(
-            boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.1
+            boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.0
         )
-        print(f"Step 2: Detections after WBF: {len(boxes)}")
 
         # Filter to only 'person' (class 0) after WBF
         person_mask = labels == 0
         boxes = boxes[person_mask]
         scores = scores[person_mask]
-        print(f"Step 3: Detections after person filter: {len(boxes)}")
-
-        # Apply soft NMS
-        if len(boxes) > 0:
-            boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
-            scores_tensor = torch.tensor(scores, dtype=torch.float32)
-            keep = nms(boxes_tensor, scores_tensor, iou_threshold=0.7)
-            boxes = boxes[keep.numpy()]
-            scores = scores[keep.numpy()]
-            print(f"Step 4: Detections after NMS: {len(boxes)}")
 
         # Scale back to original resolution
         if len(boxes) > 0:
