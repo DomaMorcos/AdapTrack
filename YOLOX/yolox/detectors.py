@@ -116,21 +116,21 @@ class FasterRCNNDetector:
 
 
 # In detectors.py
-class EnsembleDetectorV(Detector):
+class EnsembleDetector(Detector):
     def __init__(self, model1: Detector, model2: Detector, model1_weight=0.7, model2_weight=0.3, iou_thresh=0.6, conf_thresh=0.3):
         self.model1 = model1
         self.model2 = model2
         self.model1_weight = model1_weight
         self.model2_weight = model2_weight
         self.iou_thresh = iou_thresh
-        self.conf_thresh = conf_thresh  # Light filtering threshold
+        self.conf_thresh = conf_thresh  # New parameter for confidence filtering
 
     def __call__(self, img):
         orig_h, orig_w = img.shape[:2]
 
-        # Get predictions from both models
+        # Get predictions
         model1_preds = self.model1(img)  # Already filtered to 'person' in YoloDetector
-        model2_preds = self.model2(img)  # Already filtered to 'person' in FasterRCNNDetector
+        model2_preds = self.model2(img)
 
         # Prepare for WBF
         if len(model1_preds) > 0:
@@ -156,20 +156,22 @@ class EnsembleDetectorV(Detector):
         # Weighted Box Fusion
         boxes_list = [yolo_boxes_normalized, other_boxes_normalized]
         scores_list = [yolo_scores, other_scores]
-        labels_list = [yolo_labels, other_labels]
+        labels_list = [yolo_labels, other_labels]  # Use actual class labels
         weights = [self.model1_weight, self.model2_weight]
 
         boxes, scores, labels = weighted_boxes_fusion(
-            boxes_list, scores_list, labels_list, 
-            weights=weights, 
-            iou_thr=self.iou_thresh, 
-            skip_box_thr=0.0  # Keep all boxes for fusion, filter after
+            boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.0
         )
 
-        # Apply light confidence filtering after WBF
-        person_mask = (labels == 0) & (scores >= self.conf_thresh)  # Combine class filter with confidence
+        # Filter to only 'person' (class 0) after WBF
+        person_mask = labels == 0
         boxes = boxes[person_mask]
         scores = scores[person_mask]
+
+        # Apply confidence threshold
+        conf_mask = scores > self.conf_thresh
+        boxes = boxes[conf_mask]
+        scores = scores[conf_mask]
 
         # Scale back to original resolution
         if len(boxes) > 0:
