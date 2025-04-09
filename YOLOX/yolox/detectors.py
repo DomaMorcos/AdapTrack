@@ -158,7 +158,7 @@ class EnsembleDetector(Detector):
         boxes_list = [yolo_boxes_normalized, other_boxes_normalized]
         scores_list = [yolo_scores, other_scores]
         labels_list = [yolo_labels, other_labels]
-        weights Compound interest=[self.model1_weight, self.model2_weight]
+        weights = [self.model1_weight, self.model2_weight]  # Fixed syntax here
 
         boxes, scores, labels = weighted_boxes_fusion(
             boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.1
