@@ -116,17 +116,6 @@ class FasterRCNNDetector:
 
 
 # In detectors.py
-from torchvision.ops import nms
-
-from torchvision.ops import nms
-import torch
-import numpy as np
-from ensemble_boxes import weighted_boxes_fusion
-
-from torchvision.ops import nms
-import torch
-import numpy as np
-from ensemble_boxes import weighted_boxes_fusion
 
 class EnsembleDetector(Detector):
     def __init__(self, model1: Detector, model2: Detector, model1_weight=0.6, model2_weight=0.4, iou_thresh=0.6):
@@ -187,7 +176,7 @@ class EnsembleDetector(Detector):
         if len(boxes) > 0:
             boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
             scores_tensor = torch.tensor(scores, dtype=torch.float32)
-            keep = nms(boxes_tensor, scores_tensor, iou_threshold=0.5)
+            keep = nms(boxes_tensor, scores_tensor, iou_threshold=0.7)
             boxes = boxes[keep.numpy()]
             scores = scores[keep.numpy()]
             print(f"Step 4: Detections after NMS: {len(boxes)}")
