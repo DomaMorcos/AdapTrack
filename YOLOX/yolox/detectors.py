@@ -116,20 +116,21 @@ class FasterRCNNDetector:
 
 
 # In detectors.py
+from torchvision.ops import nms
+
 class EnsembleDetector(Detector):
-    def __init__(self, model1: Detector, model2: Detector, model1_weight=0.7, model2_weight=0.3, iou_thresh=0.6, conf_thresh=0.3):
+    def __init__(self, model1: Detector, model2: Detector, model1_weight=0.6, model2_weight=0.4, iou_thresh=0.6):
         self.model1 = model1
         self.model2 = model2
         self.model1_weight = model1_weight
         self.model2_weight = model2_weight
         self.iou_thresh = iou_thresh
-        self.conf_thresh = conf_thresh  # New parameter for confidence filtering
 
     def __call__(self, img):
         orig_h, orig_w = img.shape[:2]
 
         # Get predictions
-        model1_preds = self.model1(img)  # Already filtered to 'person' in YoloDetector
+        model1_preds = self.model1(img)
         model2_preds = self.model2(img)
 
         # Prepare for WBF
@@ -137,7 +138,7 @@ class EnsembleDetector(Detector):
             yolo_boxes = model1_preds[:, :4].numpy()
             yolo_scores = model1_preds[:, 4].numpy()
             yolo_boxes_normalized = yolo_boxes / np.array([orig_w, orig_h, orig_w, orig_h])
-            yolo_labels = np.zeros(len(yolo_scores))  # Class 0 for 'person'
+            yolo_labels = np.zeros(len(yolo_scores))
         else:
             yolo_boxes_normalized = np.array([])
             yolo_scores = np.array([])
@@ -147,20 +148,20 @@ class EnsembleDetector(Detector):
             other_boxes = model2_preds[:, :4].numpy()
             other_scores = model2_preds[:, 4].numpy()
             other_boxes_normalized = other_boxes / np.array([orig_w, orig_h, orig_w, orig_h])
-            other_labels = np.zeros(len(other_scores))  # Class 0 for 'person'
+            other_labels = np.zeros(len(other_scores))
         else:
             other_boxes_normalized = np.array([])
             other_scores = np.array([])
             other_labels = np.array([])
 
-        # Weighted Box Fusion
+        # Weighted Box Fusion with slight skip_box_thr
         boxes_list = [yolo_boxes_normalized, other_boxes_normalized]
         scores_list = [yolo_scores, other_scores]
-        labels_list = [yolo_labels, other_labels]  # Use actual class labels
-        weights = [self.model1_weight, self.model2_weight]
+        labels_list = [yolo_labels, other_labels]
+        weights Compound interest=[self.model1_weight, self.model2_weight]
 
         boxes, scores, labels = weighted_boxes_fusion(
-            boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.0
+            boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.1
         )
 
         # Filter to only 'person' (class 0) after WBF
@@ -168,10 +169,13 @@ class EnsembleDetector(Detector):
         boxes = boxes[person_mask]
         scores = scores[person_mask]
 
-        # Apply confidence threshold
-        conf_mask = scores > self.conf_thresh
-        boxes = boxes[conf_mask]
-        scores = scores[conf_mask]
+        # Apply soft NMS
+        if len(boxes) > 0:
+            boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
+            scores_tensor = torch.tensor(scores, dtype=torch.float32)
+            keep = nms(boxes_tensor, scores_tensor, iou_threshold=0.5)
+            boxes = boxes[keep.numpy()]
+            scores = scores[keep.numpy()]
 
         # Scale back to original resolution
         if len(boxes) > 0:
