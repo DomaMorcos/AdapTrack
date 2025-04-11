@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
-# Copyright (c) Megvii, Inc. and its affiliates.
-
 import argparse
 import os
 import pickle
@@ -85,6 +83,9 @@ def main(args):
         detector1.model = detector1.model.cuda()
         detector2.model = detector2.model.cuda()
 
+    logger.info(f"Detector1 device: {next(detector1.model.parameters()).device}")
+    logger.info(f"Detector2 device: {next(detector2.model.parameters()).device}")
+
     det_results = {video_name: {}}
     for frame_id in range(1, seq_length + 1):
         img_path = os.path.join(args.dataset_path, f"{frame_id:06d}{im_ext}")
@@ -105,11 +106,16 @@ def main(args):
             img_tensor = img_tensor.half()
 
         img_np = cv2.resize(img, (img_size[1], img_size[0]))
-        img_tensor_np = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).cuda()
+        img_tensor_np = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).cuda() / 255.0
         if args.fp16:
             img_tensor_np = img_tensor_np.half()
 
         with torch.no_grad():
+            if frame_id == 1:  # Warm-up
+                _ = detector1(img_tensor_np)
+                _ = detector2(img_tensor_np)
+                torch.cuda.synchronize()
+
             outputs1 = detector1(img_tensor_np)
             outputs2 = detector2(img_tensor_np)
 
