@@ -9,6 +9,9 @@ from trackers.units import Detection
 from AFLink.AppFreeLink import AFLink
 from interpolation.GSI import gsi_interpolation as GSI
 
+logger.remove()
+logger.add(sys.stderr, level="DEBUG")
+
 print("Running custom track.py at /kaggle/working/AdapTrack/AdapTrack/track.py")
 
 def make_parser():
@@ -18,9 +21,9 @@ def make_parser():
     parser.add_argument("--sequence_name", type=str, required=True, help="Sequence name (e.g., MOT20-01)")
     parser.add_argument("--frame_rate", type=int, default=50, help="Frame rate for max_age")
     parser.add_argument("--post_process", nargs="+", default=["aflink", "interpolation"], help="Post-processing steps")
-    parser.add_argument("--conf_thresh", type=float, default=0.45, help="Confidence threshold")
+    parser.add_argument("--conf_thresh", type=float, default=0.1, help="Confidence threshold")  # Adjusted
     parser.add_argument("--ema_beta", type=float, default=0.91, help="EMA beta for feature smoothing")
-    parser.add_argument("--min_area", type=float, default=10, help="Minimum box area")
+    parser.add_argument("--min_area", type=float, default=0, help="Minimum box area")  # Adjusted
     parser.add_argument("--max_distance", type=float, default=0.45, help="Max distance for tracking")
     parser.add_argument("--max_iou_distance", type=float, default=0.70, help="Max IoU distance")
     parser.add_argument("--min_len", type=int, default=3, help="Minimum track length")
@@ -71,10 +74,9 @@ def main(opt):
             features = dets[:, 5:]
             logger.debug(f"Frame {frame_id}: {len(boxes)} detections before filtering")
 
-            # Apply filtering
             mask = (scores >= opt.conf_thresh) & \
                    ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) >= opt.min_area) & \
-                   ((boxes[:, 2] - boxes[:, 0]) / (boxes[:, 3] - boxes[:, 1] + 1e-6) <= 1.6)
+                   ((boxes[:, 2] - boxes[:, 0]) / (boxes[:, 3] - boxes[:, 1] + 1e-6) <= 5.0)  # Relaxed
             boxes = boxes[mask]
             scores = scores[mask]
             features = features[mask]
@@ -100,7 +102,7 @@ def main(opt):
     logger.info("Starting post-processing")
     if "aflink" in opt.post_process:
         logger.debug("Running AFLink post-processing")
-        aflink = AFLink(opt.sequence_name, results, interval=opt.max_age)
+        aflink = AFLink(opt.sequence_name, results)  # Fixed
         results = aflink.process()
         logger.debug("AFLink post-processing completed")
 
