@@ -110,8 +110,8 @@ def main(args):
 
         # Inference
         with torch.no_grad():
-            outputs1 = detector1(img_np)  # [N, 5]: x1, y1, x2, y2, conf
-            outputs2 = detector2(img_np)
+            outputs1 = detector1(img_np)  # [N1, 5]: x1, y1, x2, y2, conf
+            outputs2 = detector2(img_np)  # [N2, 5]
 
             # Convert to YOLOX format: [N, 6] (cx, cy, w, h, obj_conf, class_conf)
             if outputs1.shape[0] > 0:
@@ -119,7 +119,7 @@ def main(args):
                 outputs1_yolox = torch.zeros((outputs1.shape[0], 6), dtype=torch.float32)
                 outputs1_yolox[:, :4] = outputs1_cxcywh
                 outputs1_yolox[:, 4] = outputs1[:, 4]  # obj_conf
-                outputs1_yolox[:, 5] = 1.0             # class_conf (person only)
+                outputs1_yolox[:, 5] = 1.0             # class_conf (person)
             else:
                 outputs1_yolox = torch.zeros((0, 6))
 
@@ -132,16 +132,15 @@ def main(args):
             else:
                 outputs2_yolox = torch.zeros((0, 6))
 
-            # Combine predictions (average before NMS)
-            combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)
+            # Combine predictions
+            combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)  # [N1 + N2, 6]
             if combined.shape[0] > 0:
-                weights = torch.tensor([args.model1_weight, args.model2_weight]).repeat(combined.shape[0] // 2 or 1)
-                outputs = torch.sum(combined * weights.view(-1, 1)[:combined.shape[0]], dim=0) / sum(weights[:combined.shape[0]])
-                outputs = outputs.unsqueeze(0).cuda()  # [1, 6]
-                # Add batch dimension and class scores
-                outputs = torch.cat((outputs, torch.zeros(1, 1, 1).cuda()), dim=2)  # [1, 1, 7] for 1 class
+                weights = torch.tensor([args.model1_weight] * outputs1_yolox.shape[0] + 
+                                      [args.model2_weight] * outputs2_yolox.shape[0]).cuda()
+                outputs = combined * weights.view(-1, 1)  # Weighted sum per detection
+                outputs = outputs.unsqueeze(0)  # [1, N, 6]
             else:
-                outputs = torch.zeros((1, 0, 7)).cuda()
+                outputs = torch.zeros((1, 0, 6)).cuda()
 
             # Apply YOLOX NMS
             outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
