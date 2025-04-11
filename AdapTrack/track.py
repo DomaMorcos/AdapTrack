@@ -3,20 +3,12 @@ import pickle
 import argparse
 import numpy as np
 from loguru import logger
-import torch
-import random
-import pickle
-import warnings
-from opts import *
-from os.path import join
-from trackers import metrics
-from AFLink.AppFreeLink import *
-from trackeval.run import evaluate
-from AFLink.model import PostLinker
-from AFLink.dataset import LinkData
 from trackers.tracker import Tracker
-from trackers.units import Detection
-from interpolation.GSI import gsi_interpolation
+from trackers.metrics import NearestNeighborDistanceMetric
+from AFLink.AppFreeLink import AFLink
+from interpolation.GSI import gsi_interpolation as GSI
+
+print("Running custom track.py at /kaggle/working/AdapTrack/AdapTrack/track.py")  # Debug
 
 def make_parser():
     parser = argparse.ArgumentParser("AdapTrack Tracking")
