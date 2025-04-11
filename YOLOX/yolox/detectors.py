@@ -1,168 +1,184 @@
-#!/usr/bin/env python3
-# -*- coding:utf-8 -*-
-# Copyright (c) Megvii, Inc. and its affiliates.
-
-import argparse
-import os
-import pickle
-from loguru import logger
 import torch
-import cv2
+from ultralytics import YOLO
+import torchvision
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 import numpy as np
-from yolox.data.data_augment import ValTransform
-from yolox.utils import postprocess
-from detectors import EnsembleDetector, YoloDetector  # Your BoostTrack++ detectors.py
-from configparser import ConfigParser
+import cv2
+from ensemble_boxes import weighted_boxes_fusion 
 
-def make_parser():
-    parser = argparse.ArgumentParser("YOLOX MOT Detection with Ensemble (No JSON)")
-    parser.add_argument("--dataset_path", type=str, required=True, help="Path to MOT image directory (e.g., /img1)")
-    parser.add_argument("--seqinfo_path", type=str, default=None, help="Path to seqinfo.ini (defaults to ../seqinfo.ini)")
-    parser.add_argument("--model1_path", type=str, required=True, help="Path to YOLO12l weights")
-    parser.add_argument("--model1_weight", type=float, default=0.4, help="Weight for YOLO12l predictions")
-    parser.add_argument("--model2_path", type=str, required=True, help="Path to YOLO12x weights")
-    parser.add_argument("--model2_weight", type=float, default=0.6, help="Weight for YOLO12x predictions")
-    parser.add_argument("--output_folder", type=str, default="./output", help="Output folder for detection pickle")
-    parser.add_argument("--exp_name", type=str, default="dets.pickle", help="Output pickle filename")
-    parser.add_argument("--confthre", type=float, default=0.4, help="Confidence threshold (MOT20 default)")
-    parser.add_argument("--nmsthre", type=float, default=0.8, help="NMS IoU threshold (YOLOX default)")
-    parser.add_argument("--img_size", type=str, default="608,1088", help="Input image size (height,width)")
-    parser.add_argument("--fp16", action="store_true", help="Use half-precision inference (optional, for speed)")
-    return parser
 
-def load_seqinfo(seqinfo_path):
-    """Load sequence info from seqinfo.ini."""
-    config = ConfigParser()
-    config.read(seqinfo_path)
-    seq_info = {
-        "name": config.get("Sequence", "name"),
-        "imDir": config.get("Sequence", "imDir"),
-        "frameRate": int(config.get("Sequence", "frameRate")),
-        "seqLength": int(config.get("Sequence", "seqLength")),
-        "imWidth": int(config.get("Sequence", "imWidth")),
-        "imHeight": int(config.get("Sequence", "imHeight")),
-        "imExt": config.get("Sequence", "imExt")
-    }
-    return seq_info
 
-def main(args):
-    # Parse image size
-    img_size = tuple(map(int, args.img_size.split(',')))
+from torchvision.models.detection import FasterRCNN
+from torchvision.models.detection.rpn import AnchorGenerator
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 
-    # Determine seqinfo.ini path if not provided
-    if args.seqinfo_path is None:
-        args.seqinfo_path = os.path.join(os.path.dirname(args.dataset_path), "seqinfo.ini")
-    if not os.path.exists(args.seqinfo_path):
-        raise FileNotFoundError(f"seqinfo.ini not found at {args.seqinfo_path}")
 
-    # Load sequence info
-    seq_info = load_seqinfo(args.seqinfo_path)
-    video_name = seq_info["name"]  # e.g., "01"
-    seq_length = seq_info["seqLength"]
-    orig_size = (seq_info["imHeight"], seq_info["imWidth"])
-    im_ext = seq_info["imExt"]
 
-    # Preprocessing (YOLOX logic)
-    preproc = ValTransform(rgb_means=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+from abc import ABC, abstractmethod
 
-    # Initialize detectors
-    detector1 = YoloDetector(yolo_path=args.model1_path)
-    detector2 = YoloDetector(yolo_path=args.model2_path)
+class Detector(ABC):
+    @abstractmethod
+    def __call__(self, img):
+        pass
 
-    # Apply FP16 if requested
-    if args.fp16:
-        logger.info("Using FP16 inference")
-        detector1.model.half()
-        detector2.model.half()
+class YoloDetector(Detector):
+    def __init__(self, yolo_path):
+        self.model = YOLO(yolo_path)
 
-    # Detection loop
-    det_results = {video_name: {}}
-    for frame_id in range(1, seq_length + 1):
-        # Load image
-        img_path = os.path.join(args.dataset_path, f"{frame_id:06d}{im_ext}")
-        if not os.path.exists(img_path):
-            logger.warning(f"Image {img_path} not found, skipping")
-            det_results[video_name][frame_id] = None
-            continue
+    def __call__(self, img):
+        results = self.model(img)[0]  # Let Ultralytics scale to input resolution
+        annotations = []
+        for box in results.boxes:
+            if int(box.cls) == 0:  # Only keep 'person' class (class ID 0)
+                xyxy = box.xyxy[0].tolist()  # [x_min, y_min, x_max, y_max]
+                conf = box.conf[0].item()
+                annotations.append(xyxy + [conf])
+        return torch.tensor(annotations, dtype=torch.float32) if annotations else torch.zeros((0, 5), dtype=torch.float32)
 
-        img = cv2.imread(img_path)
-        if img is None:
-            logger.warning(f"Failed to load {img_path}, skipping")
-            det_results[video_name][frame_id] = None
-            continue
+# EnsembleDetector remains unchanged as it assumes original resolution inputs
+    
 
-        # Preprocess (YOLOX ValTransform)
-        img_tensor, _ = preproc(img, None, img_size)
-        img_tensor = torch.from_numpy(img_tensor).unsqueeze(0).cuda()
-        if args.fp16:
-            img_tensor = img_tensor.half()
+# Faster R-CNN Detector (removed conf_threshold)
+class FasterRCNNDetector:
+    def __init__(self, model_path):
+        anchor_sizes = tuple((int(w),) for w, _ in [(8, 8), (16, 16), (32, 32), (64, 64), (128, 128)])
+        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+        anchor_generator = AnchorGenerator(
+            sizes=anchor_sizes,
+            aspect_ratios=aspect_ratios
+        )
+        
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone(
+            backbone_name='resnet101',
+            pretrained=False,
+            trainable_layers=3
+        )
+        self.model = FasterRCNN(
+            backbone,
+            num_classes=2,
+            rpn_anchor_generator=anchor_generator,
+            rpn_pre_nms_top_n_test=4000,
+            rpn_post_nms_top_n_test=400,
+            rpn_nms_thresh=0.67,
+            box_score_thresh=0.085,
+            box_nms_thresh=0.5,
+            box_detections_per_img=300
+        )
+        
+        in_features = self.model.roi_heads.box_predictor.cls_score.in_features
+        self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes=2)
+        
+        checkpoint = torch.load(model_path)
+        self.model.load_state_dict(checkpoint['model'])
+        
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
+        self.model.eval()
+        self.transforms = A.Compose([
+            A.Resize(height=640, width=640, always_apply=True),
+            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            ToTensorV2()
+        ])
 
-        # Convert to BGR numpy array for YoloDetector (Ultralytics expects BGR)
-        img_np = cv2.resize(img, (img_size[1], img_size[0]))  # Resize to match tensor
-
-        # Inference
+    def __call__(self, img):
+        orig_h, orig_w = img.shape[:2]
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        augmented = self.transforms(image=img_rgb)
+        img_tensor = augmented['image'].to(self.device)
+        img_tensor = img_tensor.unsqueeze(0)
+        
         with torch.no_grad():
-            outputs1 = detector1(img_np)  # [N, 5]: x1, y1, x2, y2, conf
-            outputs2 = detector2(img_np)
-
-            # Convert to YOLOX format for postprocess: [N, 7] (x1, y1, x2, y2, obj_conf, class_conf, class_id)
-            if outputs1.shape[0] > 0:
-                outputs1_yolox = torch.zeros((outputs1.shape[0], 7), dtype=torch.float32)
-                outputs1_yolox[:, :4] = outputs1[:, :4]  # x1, y1, x2, y2
-                outputs1_yolox[:, 4] = outputs1[:, 4]    # obj_conf
-                outputs1_yolox[:, 5] = 1.0               # class_conf (assume 1 for person)
-                outputs1_yolox[:, 6] = 0                 # class_id (person)
-            else:
-                outputs1_yolox = torch.zeros((0, 7))
-
-            if outputs2.shape[0] > 0:
-                outputs2_yolox = torch.zeros((outputs2.shape[0], 7), dtype=torch.float32)
-                outputs2_yolox[:, :4] = outputs2[:, :4]
-                outputs2_yolox[:, 4] = outputs2[:, 4]
-                outputs2_yolox[:, 5] = 1.0
-                outputs2_yolox[:, 6] = 0
-            else:
-                outputs2_yolox = torch.zeros((0, 7))
-
-            # Combine predictions (average before NMS)
-            if outputs1_yolox.shape[0] > 0 or outputs2_yolox.shape[0] > 0:
-                combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)
-                if combined.shape[0] > 0:
-                    weights = torch.tensor([args.model1_weight, args.model2_weight]).repeat(combined.shape[0] // 2 or 1)
-                    outputs = torch.sum(combined * weights.view(-1, 1)[:combined.shape[0]], dim=0) / sum(weights[:combined.shape[0]])
-                    outputs = outputs.unsqueeze(0).cuda()
-                else:
-                    outputs = None
-            else:
-                outputs = None
-
-            # Apply YOLOX NMS
-            if outputs is not None:
-                outputs = postprocess(outputs.unsqueeze(0), num_classes=1, confthre=args.confthre, nmsthre=args.nmsthre)[0]
-            else:
-                outputs = None
-
-        # Process detections
-        if outputs is not None:
-            det = outputs[:, :6].cpu().numpy()  # [x1, y1, x2, y2, conf, class_id]
-            det[:, 4] *= det[:, 5]  # Combine obj_conf and class_conf
-            det = det[:, :5]  # Drop class_id to match downstream format
-            # Scale back to original resolution (already in resized space, adjust if needed)
-            scale = min(img_size[0] / orig_size[0], img_size[1] / orig_size[1])
-            det[:, :4] /= scale
-            det_results[video_name][frame_id] = det
+            predictions = self.model(img_tensor)[0]
+        
+        boxes = predictions['boxes'].cpu()
+        scores = predictions['scores'].cpu()
+        labels = predictions['labels'].cpu()
+        mask = (labels == 1)  # Only filter by class (pedestrian), no confidence threshold
+        boxes = boxes[mask]
+        scores = scores[mask]
+        
+        if len(boxes) > 0:
+            scale_x = orig_w / 640
+            scale_y = orig_h / 640
+            boxes[:, 0] *= scale_x  # x1
+            boxes[:, 1] *= scale_y  # y1
+            boxes[:, 2] *= scale_x  # x2
+            boxes[:, 3] *= scale_y  # y2
+            annotations = torch.cat((boxes, scores.unsqueeze(1)), dim=1)
         else:
-            det_results[video_name][frame_id] = None
+            annotations = torch.zeros((0, 5))
+        
+        return annotations
 
-        logger.info(f"Processed frame {frame_id} for {video_name}")
 
-    # Save results
-    os.makedirs(args.output_folder, exist_ok=True)
-    pickle_path = os.path.join(args.output_folder, args.exp_name)
-    with open(pickle_path, 'wb') as f:
-        pickle.dump(det_results, f)
-    logger.info(f"Detections saved to {pickle_path}")
 
-if __name__ == "__main__":
-    args = make_parser().parse_args()
-    main(args)
+# In detectors.py
+
+class EnsembleDetector(Detector):
+    def __init__(self, model1: Detector, model2: Detector, model1_weight=0.7, model2_weight=0.3, iou_thresh=0.6, conf_thresh=0.3):
+        self.model1 = model1
+        self.model2 = model2
+        self.model1_weight = model1_weight
+        self.model2_weight = model2_weight
+        self.iou_thresh = iou_thresh
+        self.conf_thresh = conf_thresh  # New parameter for confidence filtering
+
+    def __call__(self, img):
+        orig_h, orig_w = img.shape[:2]
+
+        # Get predictions
+        model1_preds = self.model1(img)  # Already filtered to 'person' in YoloDetector
+        model2_preds = self.model2(img)
+
+        # Prepare for WBF
+        if len(model1_preds) > 0:
+            yolo_boxes = model1_preds[:, :4].numpy()
+            yolo_scores = model1_preds[:, 4].numpy()
+            yolo_boxes_normalized = yolo_boxes / np.array([orig_w, orig_h, orig_w, orig_h])
+            yolo_labels = np.zeros(len(yolo_scores))  # Class 0 for 'person'
+        else:
+            yolo_boxes_normalized = np.array([])
+            yolo_scores = np.array([])
+            yolo_labels = np.array([])
+
+        if len(model2_preds) > 0:
+            other_boxes = model2_preds[:, :4].numpy()
+            other_scores = model2_preds[:, 4].numpy()
+            other_boxes_normalized = other_boxes / np.array([orig_w, orig_h, orig_w, orig_h])
+            other_labels = np.zeros(len(other_scores))  # Class 0 for 'person'
+        else:
+            other_boxes_normalized = np.array([])
+            other_scores = np.array([])
+            other_labels = np.array([])
+
+        # Weighted Box Fusion
+        boxes_list = [yolo_boxes_normalized, other_boxes_normalized]
+        scores_list = [yolo_scores, other_scores]
+        labels_list = [yolo_labels, other_labels]  # Use actual class labels
+        weights = [self.model1_weight, self.model2_weight]
+
+        boxes, scores, labels = weighted_boxes_fusion(
+            boxes_list, scores_list, labels_list, weights=weights, iou_thr=self.iou_thresh, skip_box_thr=0.0
+        )
+
+        # Filter to only 'person' (class 0) after WBF
+        person_mask = labels == 0
+        boxes = boxes[person_mask]
+        scores = scores[person_mask]
+
+        # Apply confidence threshold
+        conf_mask = scores > self.conf_thresh
+        boxes = boxes[conf_mask]
+        scores = scores[conf_mask]
+
+        # Scale back to original resolution
+        if len(boxes) > 0:
+            boxes = boxes * np.array([orig_w, orig_h, orig_w, orig_h])
+            annotations = torch.tensor(np.hstack((boxes, scores[:, np.newaxis])), dtype=torch.float32)
+        else:
+            annotations = torch.zeros((0, 5), dtype=torch.float32)
+
+        return annotations

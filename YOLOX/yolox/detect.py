@@ -27,7 +27,7 @@ def make_parser():
     parser.add_argument("--confthre", type=float, default=0.4, help="Confidence threshold (MOT20 default)")
     parser.add_argument("--nmsthre", type=float, default=0.8, help="NMS IoU threshold (YOLOX default)")
     parser.add_argument("--img_size", type=str, default="608,1088", help="Input image size (height,width)")
-    parser.add_argument("--fp16", action="store_true", help="Use half-precision inference")
+    parser.add_argument("--fp16", action="store_true", help="Use half-precision inference (optional, for speed)")
     return parser
 
 def load_seqinfo(seqinfo_path):
@@ -65,20 +65,13 @@ def main(args):
     # Preprocessing (YOLOX logic)
     preproc = ValTransform(rgb_means=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 
-    # Initialize ensemble detector
-    detector1 = YoloDetector(model_path=args.model1_path, conf_thresh=args.confthre)
-    detector2 = YoloDetector(model_path=args.model2_path, conf_thresh=args.confthre)
-    ensemble = EnsembleDetector(
-        model1=detector1.model,
-        model2=detector2.model,
-        model1_weight=args.model1_weight,
-        model2_weight=args.model2_weight,
-        conf_thresh=args.confthre,
-        iou_thresh=args.nmsthre
-    )
+    # Initialize detectors
+    detector1 = YoloDetector(yolo_path=args.model1_path)
+    detector2 = YoloDetector(yolo_path=args.model2_path)
 
     # Apply FP16 if requested
     if args.fp16:
+        logger.info("Using FP16 inference")
         detector1.model.half()
         detector2.model.half()
 
@@ -104,22 +97,57 @@ def main(args):
         if args.fp16:
             img_tensor = img_tensor.half()
 
+        # Convert to BGR numpy array for YoloDetector (Ultralytics expects BGR)
+        img_np = cv2.resize(img, (img_size[1], img_size[0]))  # Resize to match tensor
+
         # Inference
         with torch.no_grad():
-            outputs1 = detector1.model(img_tensor)
-            outputs2 = detector2.model(img_tensor)
+            outputs1 = detector1(img_np)  # [N, 5]: x1, y1, x2, y2, conf
+            outputs2 = detector2(img_np)
+
+            # Convert to YOLOX format for postprocess: [N, 7] (x1, y1, x2, y2, obj_conf, class_conf, class_id)
+            if outputs1.shape[0] > 0:
+                outputs1_yolox = torch.zeros((outputs1.shape[0], 7), dtype=torch.float32)
+                outputs1_yolox[:, :4] = outputs1[:, :4]  # x1, y1, x2, y2
+                outputs1_yolox[:, 4] = outputs1[:, 4]    # obj_conf
+                outputs1_yolox[:, 5] = 1.0               # class_conf (assume 1 for person)
+                outputs1_yolox[:, 6] = 0                 # class_id (person)
+            else:
+                outputs1_yolox = torch.zeros((0, 7))
+
+            if outputs2.shape[0] > 0:
+                outputs2_yolox = torch.zeros((outputs2.shape[0], 7), dtype=torch.float32)
+                outputs2_yolox[:, :4] = outputs2[:, :4]
+                outputs2_yolox[:, 4] = outputs2[:, 4]
+                outputs2_yolox[:, 5] = 1.0
+                outputs2_yolox[:, 6] = 0
+            else:
+                outputs2_yolox = torch.zeros((0, 7))
+
             # Combine predictions (average before NMS)
-            outputs = (args.model1_weight * outputs1 + args.model2_weight * outputs2) / (args.model1_weight + args.model2_weight)
+            if outputs1_yolox.shape[0] > 0 or outputs2_yolox.shape[0] > 0:
+                combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)
+                if combined.shape[0] > 0:
+                    weights = torch.tensor([args.model1_weight, args.model2_weight]).repeat(combined.shape[0] // 2 or 1)
+                    outputs = torch.sum(combined * weights.view(-1, 1)[:combined.shape[0]], dim=0) / sum(weights[:combined.shape[0]])
+                    outputs = outputs.unsqueeze(0).cuda()
+                else:
+                    outputs = None
+            else:
+                outputs = None
+
             # Apply YOLOX NMS
-            outputs = postprocess(outputs, num_classes=1, confthre=args.confthre, nmsthre=args.nmsthre)
+            if outputs is not None:
+                outputs = postprocess(outputs.unsqueeze(0), num_classes=1, confthre=args.confthre, nmsthre=args.nmsthre)[0]
+            else:
+                outputs = None
 
         # Process detections
-        det = outputs[0]
-        if det is not None:
-            det[:, 4] *= det[:, 5]  # obj_conf * class_conf
-            det[:, 5] = 0  # class_id = 0 (person)
-            det = det[:, :6].cpu().numpy()
-            # Scale back to original resolution
+        if outputs is not None:
+            det = outputs[:, :6].cpu().numpy()  # [x1, y1, x2, y2, conf, class_id]
+            det[:, 4] *= det[:, 5]  # Combine obj_conf and class_conf
+            det = det[:, :5]  # Drop class_id to match downstream format
+            # Scale back to original resolution (already in resized space, adjust if needed)
             scale = min(img_size[0] / orig_size[0], img_size[1] / orig_size[1])
             det[:, :4] /= scale
             det_results[video_name][frame_id] = det
