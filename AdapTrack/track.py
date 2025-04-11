@@ -35,39 +35,18 @@ def make_parser():
     parser.add_argument("--gating_lambda", type=float, default=0.98, help="Gating lambda")
     return parser
 
-def make_parser():
-    parser = argparse.ArgumentParser("AdapTrack Tracking")
-    parser.add_argument("--det_feat_path", type=str, required=True, help="Path to detection features pickle")
-    parser.add_argument("--output_dir", type=str, required=True, help="Output directory for tracks")
-    parser.add_argument("--sequence_name", type=str, required=True, help="Sequence name (e.g., MOT20-01)")
-    parser.add_argument("--frame_rate", type=int, default=50, help="Frame rate for max_age")
-    parser.add_argument("--post_process", nargs="+", default=["aflink", "interpolation"], help="Post-processing steps")
-    parser.add_argument("--conf_thresh", type=float, default=0.45, help="Confidence threshold")
-    parser.add_argument("--ema_beta", type=float, default=0.91, help="EMA beta for feature smoothing")
-    parser.add_argument("--min_area", type=float, default=10, help="Minimum box area")
-    parser.add_argument("--max_distance", type=float, default=0.45, help="Max distance for tracking")
-    parser.add_argument("--max_iou_distance", type=float, default=0.70, help="Max IoU distance")
-    parser.add_argument("--min_len", type=int, default=3, help="Minimum track length")
-    parser.add_argument("--max_age", type=int, default=None, help="Max age (defaults to frame_rate)")
-    parser.add_argument("--gating_lambda", type=float, default=0.98, help="Gating lambda")
-    return parser
-
 def main(opt):
-    # Set max_age to frame_rate if not specified
     if opt.max_age is None:
         opt.max_age = opt.frame_rate
 
-    # Load detections with features
     with open(opt.det_feat_path, 'rb') as f:
         det_feat = pickle.load(f)
 
-    # Log loaded data structure
     logger.info(f"Loaded detections with {len(det_feat)} frames")
     sample_frame = next((fid for fid, dets in det_feat.items() if dets is not None), None)
     if sample_frame:
         logger.info(f"Sample frame {sample_frame}: {det_feat[sample_frame].shape} detections")
 
-    # Initialize tracker with required arguments
     metric = NearestNeighborDistanceMetric()
     tracker = Tracker(
         metric=metric,
@@ -80,7 +59,6 @@ def main(opt):
         gating_lambda=opt.gating_lambda
     )
 
-    # Tracking loop
     results = {}
     frame_ids = sorted(det_feat.keys(), key=int)
     for frame_id in frame_ids:
@@ -93,9 +71,9 @@ def main(opt):
             if dets.shape[1] <= 5:
                 raise ValueError(f"Frame {frame_id}: No features found in detections (shape {dets.shape})")
 
-            boxes = dets[:, :4]  # x1, y1, x2, y2
-            scores = dets[:, 4]  # confidence
-            features = dets[:, 5:]  # ReID features
+            boxes = dets[:, :4]
+            scores = dets[:, 4]
+            features = dets[:, 5:]
             mask = (scores >= opt.conf_thresh) & \
                    ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) >= opt.min_area) & \
                    ((boxes[:, 2] - boxes[:, 0]) / (boxes[:, 3] - boxes[:, 1] + 1e-6) <= 1.6)
@@ -106,7 +84,6 @@ def main(opt):
             tracker.predict()
             tracker.update(boxes, features)
 
-        # Store results
         results[frame_id] = []
         for track in tracker.tracks:
             if track.is_confirmed() and track.time_since_update <= 1:
@@ -116,7 +93,6 @@ def main(opt):
 
         logger.info(f"Processed frame {frame_id}")
 
-    # Post-processing
     if "aflink" in opt.post_process:
         aflink = AFLink(opt.sequence_name, results, interval=opt.max_age)
         results = aflink.process()
@@ -125,7 +101,6 @@ def main(opt):
         gsi = GSI(opt.sequence_name, results, interval=1000, tau=25)
         results = gsi.process()
 
-    # Save results in MOT format
     os.makedirs(opt.output_dir, exist_ok=True)
     output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}.txt")
     with open(output_path, 'w') as f:
