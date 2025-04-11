@@ -9,12 +9,32 @@ from trackers.metrics import NearestNeighborDistanceMetric
 from trackers.units import Detection
 from AFLink.AppFreeLink import AFLink
 from interpolation.GSI import gsi_interpolation as GSI
-import torch  # For model loading
+import torch
 
 logger.remove()
 logger.add(sys.stderr, level="DEBUG")
 
 print("Running custom track.py at /kaggle/working/AdapTrack/AdapTrack/track.py")
+
+class InferenceDataset:
+    def transform(self, x1, x2):
+        if isinstance(x1, list):
+            x1 = np.array(x1)
+        if isinstance(x2, list):
+            x2 = np.array(x2)
+        
+        min_ = np.concatenate((x1, x2), axis=0).min(axis=0)
+        max_ = np.concatenate((x1, x2), axis=0).max(axis=0)
+        subtractor = (max_ + min_) / 2
+        divisor = (max_ - min_) / 2 + 1e-5
+        x1 = (x1 - subtractor) / divisor
+        x2 = (x2 - subtractor) / divisor
+
+        x1 = torch.tensor(x1, dtype=torch.float)
+        x2 = torch.tensor(x2, dtype=torch.float)
+        x1 = x1.unsqueeze(dim=0)
+        x2 = x2.unsqueeze(dim=0)
+        return x1, x2
 
 def make_parser():
     parser = argparse.ArgumentParser("AdapTrack Tracking")
@@ -115,21 +135,18 @@ def main(opt):
     logger.info("Starting post-processing")
     if "aflink" in opt.post_process:
         logger.debug("Running AFLink post-processing")
-        # Load the model
-        model = torch.load("/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth")
-        # Placeholder for dataset object (adjust based on your setup)
-        from AFLink.dataset import MOTDataset  # Hypothetical import; adjust as needed
-        dataset = MOTDataset()  # Replace with actual instantiation
+        model = torch.load("/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", weights_only=True)
+        dataset = InferenceDataset()
         aflink = AFLink(
             path_in=initial_output_path,
             path_out=os.path.join(opt.output_dir, f"{opt.sequence_name}_aflink.txt"),
             model=model,
             dataset=dataset,
-            thrT=(1, 30),  # Adjusted to tuple
+            thrT=(1, 30),
             thrS=0.4,
             thrP=0.5
         )
-        aflink.link()  # Use link() instead of process()
+        aflink.link()
         logger.debug("AFLink post-processing completed")
 
     if "interpolation" in opt.post_process:
