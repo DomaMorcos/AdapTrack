@@ -27,6 +27,7 @@ def make_parser():
     parser.add_argument("--confthre", type=float, default=0.4, help="Confidence threshold (MOT20 default)")
     parser.add_argument("--nmsthre", type=float, default=0.8, help="NMS IoU threshold (YOLOX default)")
     parser.add_argument("--img_size", type=str, default="608,1088", help="Input image size (height,width)")
+    parser.add_argument("--fp16", action="store_true", help="Use half-precision inference")
     return parser
 
 def load_seqinfo(seqinfo_path):
@@ -73,8 +74,13 @@ def main(args):
         model1_weight=args.model1_weight,
         model2_weight=args.model2_weight,
         conf_thresh=args.confthre,
-        iou_thresh=args.nmsthre  # Overridden by YOLOX NMS
+        iou_thresh=args.nmsthre
     )
+
+    # Apply FP16 if requested
+    if args.fp16:
+        detector1.model.half()
+        detector2.model.half()
 
     # Detection loop
     det_results = {video_name: {}}
@@ -95,6 +101,8 @@ def main(args):
         # Preprocess (YOLOX ValTransform)
         img_tensor, _ = preproc(img, None, img_size)
         img_tensor = torch.from_numpy(img_tensor).unsqueeze(0).cuda()
+        if args.fp16:
+            img_tensor = img_tensor.half()
 
         # Inference
         with torch.no_grad():
