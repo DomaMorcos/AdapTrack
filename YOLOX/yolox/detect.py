@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from yolox.data.data_augment import ValTransform
 from yolox.utils import postprocess
-from detectors import EnsembleDetector, YoloDetector  # Your BoostTrack++ detectors.py
+from detectors import YoloDetector  # Your BoostTrack++ detectors.py
 from configparser import ConfigParser
 
 def make_parser():
@@ -44,6 +44,14 @@ def load_seqinfo(seqinfo_path):
         "imExt": config.get("Sequence", "imExt")
     }
     return seq_info
+
+def xyxy2cxcywh(boxes):
+    """Convert [x1, y1, x2, y2] to [cx, cy, w, h]."""
+    cx = (boxes[:, 0] + boxes[:, 2]) / 2
+    cy = (boxes[:, 1] + boxes[:, 3]) / 2
+    w = boxes[:, 2] - boxes[:, 0]
+    h = boxes[:, 3] - boxes[:, 1]
+    return torch.stack((cx, cy, w, h), dim=1)
 
 def main(args):
     # Parse image size
@@ -97,57 +105,57 @@ def main(args):
         if args.fp16:
             img_tensor = img_tensor.half()
 
-        # Convert to BGR numpy array for YoloDetector (Ultralytics expects BGR)
-        img_np = cv2.resize(img, (img_size[1], img_size[0]))  # Resize to match tensor
+        # Convert to BGR numpy array for YoloDetector
+        img_np = cv2.resize(img, (img_size[1], img_size[0]))
 
         # Inference
         with torch.no_grad():
             outputs1 = detector1(img_np)  # [N, 5]: x1, y1, x2, y2, conf
             outputs2 = detector2(img_np)
 
-            # Convert to YOLOX format for postprocess: [N, 7] (x1, y1, x2, y2, obj_conf, class_conf, class_id)
+            # Convert to YOLOX format: [N, 6] (cx, cy, w, h, obj_conf, class_conf)
             if outputs1.shape[0] > 0:
-                outputs1_yolox = torch.zeros((outputs1.shape[0], 7), dtype=torch.float32)
-                outputs1_yolox[:, :4] = outputs1[:, :4]  # x1, y1, x2, y2
-                outputs1_yolox[:, 4] = outputs1[:, 4]    # obj_conf
-                outputs1_yolox[:, 5] = 1.0               # class_conf (assume 1 for person)
-                outputs1_yolox[:, 6] = 0                 # class_id (person)
+                outputs1_cxcywh = xyxy2cxcywh(outputs1[:, :4])
+                outputs1_yolox = torch.zeros((outputs1.shape[0], 6), dtype=torch.float32)
+                outputs1_yolox[:, :4] = outputs1_cxcywh
+                outputs1_yolox[:, 4] = outputs1[:, 4]  # obj_conf
+                outputs1_yolox[:, 5] = 1.0             # class_conf (person only)
             else:
-                outputs1_yolox = torch.zeros((0, 7))
+                outputs1_yolox = torch.zeros((0, 6))
 
             if outputs2.shape[0] > 0:
-                outputs2_yolox = torch.zeros((outputs2.shape[0], 7), dtype=torch.float32)
-                outputs2_yolox[:, :4] = outputs2[:, :4]
+                outputs2_cxcywh = xyxy2cxcywh(outputs2[:, :4])
+                outputs2_yolox = torch.zeros((outputs2.shape[0], 6), dtype=torch.float32)
+                outputs2_yolox[:, :4] = outputs2_cxcywh
                 outputs2_yolox[:, 4] = outputs2[:, 4]
                 outputs2_yolox[:, 5] = 1.0
-                outputs2_yolox[:, 6] = 0
             else:
-                outputs2_yolox = torch.zeros((0, 7))
+                outputs2_yolox = torch.zeros((0, 6))
 
             # Combine predictions (average before NMS)
-            if outputs1_yolox.shape[0] > 0 or outputs2_yolox.shape[0] > 0:
-                combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)
-                if combined.shape[0] > 0:
-                    weights = torch.tensor([args.model1_weight, args.model2_weight]).repeat(combined.shape[0] // 2 or 1)
-                    outputs = torch.sum(combined * weights.view(-1, 1)[:combined.shape[0]], dim=0) / sum(weights[:combined.shape[0]])
-                    outputs = outputs.unsqueeze(0).cuda()
-                else:
-                    outputs = None
+            combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)
+            if combined.shape[0] > 0:
+                weights = torch.tensor([args.model1_weight, args.model2_weight]).repeat(combined.shape[0] // 2 or 1)
+                outputs = torch.sum(combined * weights.view(-1, 1)[:combined.shape[0]], dim=0) / sum(weights[:combined.shape[0]])
+                outputs = outputs.unsqueeze(0).cuda()  # [1, 6]
+                # Add batch dimension and class scores
+                outputs = torch.cat((outputs, torch.zeros(1, 1, 1).cuda()), dim=2)  # [1, 1, 7] for 1 class
             else:
-                outputs = None
+                outputs = torch.zeros((1, 0, 7)).cuda()
 
             # Apply YOLOX NMS
-            if outputs is not None:
-                outputs = postprocess(outputs.unsqueeze(0), num_classes=1, confthre=args.confthre, nmsthre=args.nmsthre)[0]
+            outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
+            if outputs[0] is not None:
+                outputs = outputs[0]  # [N, 7]
             else:
                 outputs = None
 
         # Process detections
         if outputs is not None:
-            det = outputs[:, :6].cpu().numpy()  # [x1, y1, x2, y2, conf, class_id]
+            det = outputs[:, :6].cpu().numpy()  # [x1, y1, x2, y2, obj_conf, class_conf]
             det[:, 4] *= det[:, 5]  # Combine obj_conf and class_conf
-            det = det[:, :5]  # Drop class_id to match downstream format
-            # Scale back to original resolution (already in resized space, adjust if needed)
+            det = det[:, :5]  # Drop class_conf, keep [x1, y1, x2, y2, conf]
+            # Scale back to original resolution
             scale = min(img_size[0] / orig_size[0], img_size[1] / orig_size[1])
             det[:, :4] /= scale
             det_results[video_name][frame_id] = det
