@@ -8,7 +8,7 @@ from trackers.metrics import NearestNeighborDistanceMetric
 from AFLink.AppFreeLink import AFLink
 from interpolation.GSI import gsi_interpolation as GSI
 
-print("Running custom track.py at /kaggle/working/AdapTrack/AdapTrack/track.py")  # Debug
+print("Running custom track.py at /kaggle/working/AdapTrack/AdapTrack/track.py")
 
 def make_parser():
     parser = argparse.ArgumentParser("AdapTrack Tracking")
@@ -24,7 +24,7 @@ def make_parser():
     parser.add_argument("--max_iou_distance", type=float, default=0.70, help="Max IoU distance")
     parser.add_argument("--min_len", type=int, default=3, help="Minimum track length")
     parser.add_argument("--max_age", type=int, default=None, help="Max age (defaults to frame_rate)")
-    parser.add_argument("--gating_lambda", type=float, default=0.98, help="Gating lambda")
+    # Removed gating_lambda since it's not used in Tracker
     return parser
 
 def main(opt):
@@ -48,7 +48,7 @@ def main(opt):
         min_len=opt.min_len,
         max_age=opt.max_age,
         ema_beta=opt.ema_beta,
-        gating_lambda=opt.gating_lambda
+        conf_thresh=opt.conf_thresh  # Added to match Tracker's expected argument
     )
 
     results = {}
