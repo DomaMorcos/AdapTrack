@@ -82,6 +82,7 @@ def main(args):
         logger.info("Using FP16 inference")
         detector1.model.half()
         detector2.model.half()
+        torch.cuda.synchronize()  # Ensure models are ready
 
     # Detection loop
     det_results = {video_name: {}}
@@ -116,31 +117,31 @@ def main(args):
             # Convert to YOLOX format: [N, 6] (cx, cy, w, h, obj_conf, class_conf)
             if outputs1.shape[0] > 0:
                 outputs1_cxcywh = xyxy2cxcywh(outputs1[:, :4])
-                outputs1_yolox = torch.zeros((outputs1.shape[0], 6), dtype=torch.float32)
-                outputs1_yolox[:, :4] = outputs1_cxcywh
-                outputs1_yolox[:, 4] = outputs1[:, 4]  # obj_conf
-                outputs1_yolox[:, 5] = 1.0             # class_conf (person)
+                outputs1_yolox = torch.zeros((outputs1.shape[0], 6), dtype=torch.float32, device='cuda')
+                outputs1_yolox[:, :4] = outputs1_cxcywh.cuda()
+                outputs1_yolox[:, 4] = outputs1[:, 4].cuda()  # obj_conf
+                outputs1_yolox[:, 5] = 1.0                    # class_conf (person)
             else:
-                outputs1_yolox = torch.zeros((0, 6))
+                outputs1_yolox = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
 
             if outputs2.shape[0] > 0:
                 outputs2_cxcywh = xyxy2cxcywh(outputs2[:, :4])
-                outputs2_yolox = torch.zeros((outputs2.shape[0], 6), dtype=torch.float32)
-                outputs2_yolox[:, :4] = outputs2_cxcywh
-                outputs2_yolox[:, 4] = outputs2[:, 4]
+                outputs2_yolox = torch.zeros((outputs2.shape[0], 6), dtype=torch.float32, device='cuda')
+                outputs2_yolox[:, :4] = outputs2_cxcywh.cuda()
+                outputs2_yolox[:, 4] = outputs2[:, 4].cuda()
                 outputs2_yolox[:, 5] = 1.0
             else:
-                outputs2_yolox = torch.zeros((0, 6))
+                outputs2_yolox = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
 
             # Combine predictions
             combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)  # [N1 + N2, 6]
             if combined.shape[0] > 0:
                 weights = torch.tensor([args.model1_weight] * outputs1_yolox.shape[0] + 
-                                      [args.model2_weight] * outputs2_yolox.shape[0]).cuda()
-                outputs = combined * weights.view(-1, 1)  # Weighted sum per detection
+                                      [args.model2_weight] * outputs2_yolox.shape[0], device='cuda')
+                outputs = combined * weights.view(-1, 1)  # Weighted multiplication per detection
                 outputs = outputs.unsqueeze(0)  # [1, N, 6]
             else:
-                outputs = torch.zeros((1, 0, 6)).cuda()
+                outputs = torch.zeros((1, 0, 6), device='cuda')
 
             # Apply YOLOX NMS
             outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
@@ -162,6 +163,7 @@ def main(args):
             det_results[video_name][frame_id] = None
 
         logger.info(f"Processed frame {frame_id} for {video_name}")
+        torch.cuda.synchronize()  # Ensure GPU work is done before next iteration
 
     # Save results
     os.makedirs(args.output_folder, exist_ok=True)
