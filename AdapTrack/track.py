@@ -5,6 +5,7 @@ import numpy as np
 from loguru import logger
 from trackers.tracker import Tracker
 from trackers.metrics import NearestNeighborDistanceMetric
+from trackers.units import Detection  # Import Detection to create objects
 from AFLink.AppFreeLink import AFLink
 from interpolation.GSI import gsi_interpolation as GSI
 
@@ -24,7 +25,6 @@ def make_parser():
     parser.add_argument("--max_iou_distance", type=float, default=0.70, help="Max IoU distance")
     parser.add_argument("--min_len", type=int, default=3, help="Minimum track length")
     parser.add_argument("--max_age", type=int, default=None, help="Max age (defaults to frame_rate)")
-    # Removed gating_lambda since it's not used in Tracker
     return parser
 
 def main(opt):
@@ -48,7 +48,7 @@ def main(opt):
         min_len=opt.min_len,
         max_age=opt.max_age,
         ema_beta=opt.ema_beta,
-        conf_thresh=opt.conf_thresh  # Added to match Tracker's expected argument
+        conf_thresh=opt.conf_thresh
     )
 
     results = {}
@@ -57,15 +57,17 @@ def main(opt):
         dets = det_feat[frame_id]
         if dets is None or dets.shape[0] == 0:
             tracker.predict()
-            tracker.update(np.empty((0, 5)), np.empty((0, 0)))
+            tracker.update([])  # Pass empty list of detections
             logger.info(f"Frame {frame_id}: No detections")
         else:
             if dets.shape[1] <= 5:
                 raise ValueError(f"Frame {frame_id}: No features found in detections (shape {dets.shape})")
 
-            boxes = dets[:, :4]
+            boxes = dets[:, :4]  # [x1, y1, x2, y2]
             scores = dets[:, 4]
             features = dets[:, 5:]
+
+            # Apply filtering
             mask = (scores >= opt.conf_thresh) & \
                    ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) >= opt.min_area) & \
                    ((boxes[:, 2] - boxes[:, 0]) / (boxes[:, 3] - boxes[:, 1] + 1e-6) <= 1.6)
@@ -73,14 +75,18 @@ def main(opt):
             scores = scores[mask]
             features = features[mask]
 
+            # Create Detection objects
+            detections = [Detection(bbox, score, feature) for bbox, score, feature in zip(boxes, scores, features)]
+
             tracker.predict()
-            tracker.update(boxes, features)
+            tracker.update(detections)  # Pass list of Detection objects
 
         results[frame_id] = []
         for track in tracker.tracks:
             if track.is_confirmed() and track.time_since_update <= 1:
                 bbox = track.to_tlwh()
-                score = scores[track.last_idx] if track.last_idx >= 0 and track.last_idx < len(scores) else 1.0
+                # Use track.confidence if available, otherwise default to 1.0
+                score = track.confidence if hasattr(track, 'confidence') else 1.0
                 results[frame_id].append([track.track_id] + bbox.tolist() + [score])
 
         logger.info(f"Processed frame {frame_id}")
