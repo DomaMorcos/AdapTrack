@@ -1,5 +1,4 @@
 import os
-import sys
 import pickle
 import argparse
 import numpy as np
@@ -9,6 +8,7 @@ from trackers.metrics import NearestNeighborDistanceMetric
 from trackers.units import Detection
 from AFLink.AppFreeLink import AFLink
 from interpolation.GSI import gsi_interpolation as GSI
+import torch  # For model loading
 
 logger.remove()
 logger.add(sys.stderr, level="DEBUG")
@@ -102,11 +102,33 @@ def main(opt):
         logger.debug(f"Frame {frame_id}: Stored {len(results[frame_id])} tracks")
         logger.info(f"Processed frame {frame_id}")
 
+    # Save initial tracks for AFLink
+    logger.info("Saving initial tracks for AFLink")
+    os.makedirs(opt.output_dir, exist_ok=True)
+    initial_output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}_initial.txt")
+    with open(initial_output_path, 'w') as f:
+        for frame_id in sorted(results.keys(), key=int):
+            for track in results[frame_id]:
+                f.write(f"{frame_id},{track[0]},{track[1]:.2f},{track[2]:.2f},{track[3]:.2f},{track[4]:.2f},{track[5]:.2f}\n")
+
     logger.info("Starting post-processing")
     if "aflink" in opt.post_process:
         logger.debug("Running AFLink post-processing")
-        aflink = AFLink(opt.sequence_name, results, model="/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", dataset="MOT20", thrT=30, thrS=0.4, thrP=0.5)
-        results = aflink.process()
+        # Load the model
+        model = torch.load("/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth")
+        # Placeholder for dataset object (adjust based on your setup)
+        from AFLink.dataset import MOTDataset  # Hypothetical import; adjust as needed
+        dataset = MOTDataset()  # Replace with actual instantiation
+        aflink = AFLink(
+            path_in=initial_output_path,
+            path_out=os.path.join(opt.output_dir, f"{opt.sequence_name}_aflink.txt"),
+            model=model,
+            dataset=dataset,
+            thrT=(1, 30),  # Adjusted to tuple
+            thrS=0.4,
+            thrP=0.5
+        )
+        aflink.link()  # Use link() instead of process()
         logger.debug("AFLink post-processing completed")
 
     if "interpolation" in opt.post_process:
@@ -115,14 +137,13 @@ def main(opt):
         results = gsi.process()
         logger.debug("GSI interpolation completed")
 
-    logger.info("Saving tracks")
-    os.makedirs(opt.output_dir, exist_ok=True)
-    output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}.txt")
-    with open(output_path, 'w') as f:
+    logger.info("Saving final tracks")
+    final_output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}.txt")
+    with open(final_output_path, 'w') as f:
         for frame_id in sorted(results.keys(), key=int):
             for track in results[frame_id]:
                 f.write(f"{frame_id},{track[0]},{track[1]:.2f},{track[2]:.2f},{track[3]:.2f},{track[4]:.2f},{track[5]:.2f},-1,-1,-1\n")
-    logger.info(f"Tracks saved to {output_path}")
+    logger.info(f"Tracks saved to {final_output_path}")
 
 if __name__ == "__main__":
     opt = make_parser().parse_args()
