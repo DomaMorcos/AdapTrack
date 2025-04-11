@@ -1,5 +1,4 @@
 import os
-import sys
 import pickle
 import argparse
 import numpy as np
@@ -22,9 +21,9 @@ def make_parser():
     parser.add_argument("--sequence_name", type=str, required=True, help="Sequence name (e.g., MOT20-01)")
     parser.add_argument("--frame_rate", type=int, default=50, help="Frame rate for max_age")
     parser.add_argument("--post_process", nargs="+", default=["aflink", "interpolation"], help="Post-processing steps")
-    parser.add_argument("--conf_thresh", type=float, default=0.1, help="Confidence threshold")  # Adjusted
+    parser.add_argument("--conf_thresh", type=float, default=0.1, help="Confidence threshold")
     parser.add_argument("--ema_beta", type=float, default=0.91, help="EMA beta for feature smoothing")
-    parser.add_argument("--min_area", type=float, default=0, help="Minimum box area")  # Adjusted
+    parser.add_argument("--min_area", type=float, default=0, help="Minimum box area")
     parser.add_argument("--max_distance", type=float, default=0.45, help="Max distance for tracking")
     parser.add_argument("--max_iou_distance", type=float, default=0.70, help="Max IoU distance")
     parser.add_argument("--min_len", type=int, default=3, help="Minimum track length")
@@ -34,6 +33,8 @@ def make_parser():
 def main(opt):
     if opt.max_age is None:
         opt.max_age = opt.frame_rate
+
+    logger.info(f"Using conf_thresh={opt.conf_thresh}, min_area={opt.min_area}")
 
     with open(opt.det_feat_path, 'rb') as f:
         det_feat = pickle.load(f)
@@ -77,7 +78,7 @@ def main(opt):
 
             mask = (scores >= opt.conf_thresh) & \
                    ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) >= opt.min_area) & \
-                   ((boxes[:, 2] - boxes[:, 0]) / (boxes[:, 3] - boxes[:, 1] + 1e-6) <= 5.0)  # Relaxed
+                   ((boxes[:, 2] - boxes[:, 0]) / (boxes[:, 3] - boxes[:, 1] + 1e-6) <= 5.0)
             boxes = boxes[mask]
             scores = scores[mask]
             features = features[mask]
@@ -103,7 +104,7 @@ def main(opt):
     logger.info("Starting post-processing")
     if "aflink" in opt.post_process:
         logger.debug("Running AFLink post-processing")
-        aflink = AFLink(opt.sequence_name, results)  # Fixed
+        aflink = AFLink(opt.sequence_name, results, model="/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", dataset="MOT20", thrT=30, thrS=0.4, thrP=0.5)
         results = aflink.process()
         logger.debug("AFLink post-processing completed")
 
