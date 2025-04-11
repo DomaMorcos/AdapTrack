@@ -5,7 +5,7 @@ import numpy as np
 from loguru import logger
 from trackers.tracker import Tracker
 from trackers.metrics import NearestNeighborDistanceMetric
-from trackers.units import Detection  # Import Detection to create objects
+from trackers.units import Detection
 from AFLink.AppFreeLink import AFLink
 from interpolation.GSI import gsi_interpolation as GSI
 
@@ -55,17 +55,21 @@ def main(opt):
     frame_ids = sorted(det_feat.keys(), key=int)
     for frame_id in frame_ids:
         dets = det_feat[frame_id]
+        logger.debug(f"Processing frame {frame_id}: {dets.shape if dets is not None else 'None'} detections")
         if dets is None or dets.shape[0] == 0:
+            logger.debug(f"Frame {frame_id}: Predicting with no detections")
             tracker.predict()
-            tracker.update([])  # Pass empty list of detections
-            logger.info(f"Frame {frame_id}: No detections")
+            logger.debug(f"Frame {frame_id}: Updating with empty detections")
+            tracker.update([])
+            logger.info(f"Processed frame {frame_id}")
         else:
             if dets.shape[1] <= 5:
                 raise ValueError(f"Frame {frame_id}: No features found in detections (shape {dets.shape})")
 
-            boxes = dets[:, :4]  # [x1, y1, x2, y2]
+            boxes = dets[:, :4]
             scores = dets[:, 4]
             features = dets[:, 5:]
+            logger.debug(f"Frame {frame_id}: {len(boxes)} detections before filtering")
 
             # Apply filtering
             mask = (scores >= opt.conf_thresh) & \
@@ -74,31 +78,39 @@ def main(opt):
             boxes = boxes[mask]
             scores = scores[mask]
             features = features[mask]
+            logger.debug(f"Frame {frame_id}: {len(boxes)} detections after filtering")
 
-            # Create Detection objects
             detections = [Detection(bbox, score, feature) for bbox, score, feature in zip(boxes, scores, features)]
+            logger.debug(f"Frame {frame_id}: Created {len(detections)} Detection objects")
 
+            logger.debug(f"Frame {frame_id}: Predicting")
             tracker.predict()
-            tracker.update(detections)  # Pass list of Detection objects
+            logger.debug(f"Frame {frame_id}: Updating with {len(detections)} detections")
+            tracker.update(detections)
 
         results[frame_id] = []
         for track in tracker.tracks:
             if track.is_confirmed() and track.time_since_update <= 1:
                 bbox = track.to_tlwh()
-                # Use track.confidence if available, otherwise default to 1.0
                 score = track.confidence if hasattr(track, 'confidence') else 1.0
                 results[frame_id].append([track.track_id] + bbox.tolist() + [score])
-
+        logger.debug(f"Frame {frame_id}: Stored {len(results[frame_id])} tracks")
         logger.info(f"Processed frame {frame_id}")
 
+    logger.info("Starting post-processing")
     if "aflink" in opt.post_process:
+        logger.debug("Running AFLink post-processing")
         aflink = AFLink(opt.sequence_name, results, interval=opt.max_age)
         results = aflink.process()
+        logger.debug("AFLink post-processing completed")
 
     if "interpolation" in opt.post_process:
+        logger.debug("Running GSI interpolation")
         gsi = GSI(opt.sequence_name, results, interval=1000, tau=25)
         results = gsi.process()
+        logger.debug("GSI interpolation completed")
 
+    logger.info("Saving tracks")
     os.makedirs(opt.output_dir, exist_ok=True)
     output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}.txt")
     with open(output_path, 'w') as f:
