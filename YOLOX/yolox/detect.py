@@ -24,8 +24,8 @@ def make_parser():
     parser.add_argument("--model2_weight", type=float, default=0.6, help="Weight for YOLO12x predictions")
     parser.add_argument("--output_folder", type=str, default="./output", help="Output folder for detection pickle")
     parser.add_argument("--exp_name", type=str, default="dets.pickle", help="Output pickle filename")
-    parser.add_argument("--confthre", type=float, default=0.4, help="Confidence threshold (MOT20 default)")
-    parser.add_argument("--nmsthre", type=float, default=0.8, help="NMS IoU threshold (YOLOX default)")
+    parser.add_argument("--confthre", type=float, default=0.1, help="Confidence threshold (lowered for debugging)")
+    parser.add_argument("--nmsthre", type=float, default=0.5, help="NMS IoU threshold (lowered for debugging)")
     parser.add_argument("--img_size", type=str, default="608,1088", help="Input image size (height,width)")
     parser.add_argument("--fp16", action="store_true", help="Use half-precision inference (optional, for speed)")
     return parser
@@ -82,7 +82,7 @@ def main(args):
         logger.info("Using FP16 inference")
         detector1.model.half()
         detector2.model.half()
-        torch.cuda.synchronize()  # Ensure models are ready
+        torch.cuda.synchronize()
 
     # Detection loop
     det_results = {video_name: {}}
@@ -140,15 +140,19 @@ def main(args):
                                       [args.model2_weight] * outputs2_yolox.shape[0], device='cuda')
                 outputs = combined * weights.view(-1, 1)  # Weighted multiplication per detection
                 outputs = outputs.unsqueeze(0)  # [1, N, 6]
+                logger.info(f"Frame {frame_id}: {combined.shape[0]} detections before NMS")
             else:
                 outputs = torch.zeros((1, 0, 6), device='cuda')
+                logger.info(f"Frame {frame_id}: 0 detections before NMS")
 
             # Apply YOLOX NMS
             outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
             if outputs[0] is not None:
                 outputs = outputs[0]  # [N, 7]
+                logger.info(f"Frame {frame_id}: {outputs.shape[0]} detections after NMS")
             else:
                 outputs = None
+                logger.info(f"Frame {frame_id}: 0 detections after NMS")
 
         # Process detections
         if outputs is not None:
@@ -163,7 +167,6 @@ def main(args):
             det_results[video_name][frame_id] = None
 
         logger.info(f"Processed frame {frame_id} for {video_name}")
-        torch.cuda.synchronize()  # Ensure GPU work is done before next iteration
 
     # Save results
     os.makedirs(args.output_folder, exist_ok=True)
