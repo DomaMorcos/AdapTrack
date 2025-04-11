@@ -44,7 +44,6 @@ def main(opt):
         min_len=opt.min_len,
         max_age=opt.max_age,
         ema_beta=opt.ema_beta,
-        gating_lambda=opt.gating_lambda
     )
 
     # Tracking loop
