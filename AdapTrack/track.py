@@ -35,6 +35,23 @@ def make_parser():
     parser.add_argument("--gating_lambda", type=float, default=0.98, help="Gating lambda")
     return parser
 
+def make_parser():
+    parser = argparse.ArgumentParser("AdapTrack Tracking")
+    parser.add_argument("--det_feat_path", type=str, required=True, help="Path to detection features pickle")
+    parser.add_argument("--output_dir", type=str, required=True, help="Output directory for tracks")
+    parser.add_argument("--sequence_name", type=str, required=True, help="Sequence name (e.g., MOT20-01)")
+    parser.add_argument("--frame_rate", type=int, default=50, help="Frame rate for max_age")
+    parser.add_argument("--post_process", nargs="+", default=["aflink", "interpolation"], help="Post-processing steps")
+    parser.add_argument("--conf_thresh", type=float, default=0.45, help="Confidence threshold")
+    parser.add_argument("--ema_beta", type=float, default=0.91, help="EMA beta for feature smoothing")
+    parser.add_argument("--min_area", type=float, default=10, help="Minimum box area")
+    parser.add_argument("--max_distance", type=float, default=0.45, help="Max distance for tracking")
+    parser.add_argument("--max_iou_distance", type=float, default=0.70, help="Max IoU distance")
+    parser.add_argument("--min_len", type=int, default=3, help="Minimum track length")
+    parser.add_argument("--max_age", type=int, default=None, help="Max age (defaults to frame_rate)")
+    parser.add_argument("--gating_lambda", type=float, default=0.98, help="Gating lambda")
+    return parser
+
 def main(opt):
     # Set max_age to frame_rate if not specified
     if opt.max_age is None:
@@ -51,10 +68,10 @@ def main(opt):
         logger.info(f"Sample frame {sample_frame}: {det_feat[sample_frame].shape} detections")
 
     # Initialize tracker with required arguments
-    metric = NearestNeighborDistanceMetric()  # Default metric from AdapTrack
+    metric = NearestNeighborDistanceMetric()
     tracker = Tracker(
-        metric=metric,  # Required argument
-        vid_name=opt.sequence_name,  # Required argument (e.g., "MOT20-01")
+        metric=metric,
+        vid_name=opt.sequence_name,
         max_distance=opt.max_distance,
         max_iou_distance=opt.max_iou_distance,
         min_len=opt.min_len,
@@ -70,14 +87,12 @@ def main(opt):
         dets = det_feat[frame_id]
         if dets is None or dets.shape[0] == 0:
             tracker.predict()
-            tracker.update(np.empty((0, 5)), np.empty((0, 0)))  # Empty features if no detections
+            tracker.update(np.empty((0, 5)), np.empty((0, 0)))
             logger.info(f"Frame {frame_id}: No detections")
         else:
-            # Verify detection format
             if dets.shape[1] <= 5:
                 raise ValueError(f"Frame {frame_id}: No features found in detections (shape {dets.shape})")
 
-            # Filter detections
             boxes = dets[:, :4]  # x1, y1, x2, y2
             scores = dets[:, 4]  # confidence
             features = dets[:, 5:]  # ReID features
@@ -95,7 +110,7 @@ def main(opt):
         results[frame_id] = []
         for track in tracker.tracks:
             if track.is_confirmed() and track.time_since_update <= 1:
-                bbox = track.to_tlwh()  # top-left width-height
+                bbox = track.to_tlwh()
                 score = scores[track.last_idx] if track.last_idx >= 0 and track.last_idx < len(scores) else 1.0
                 results[frame_id].append([track.track_id] + bbox.tolist() + [score])
 
@@ -107,7 +122,7 @@ def main(opt):
         results = aflink.process()
 
     if "interpolation" in opt.post_process:
-        gsi = GSI(opt.sequence_name, results, interval=1000, tau=25)  # BoostTrack++ settings
+        gsi = GSI(opt.sequence_name, results, interval=1000, tau=25)
         results = gsi.process()
 
     # Save results in MOT format
