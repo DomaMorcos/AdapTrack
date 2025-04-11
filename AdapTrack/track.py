@@ -3,13 +3,9 @@ import pickle
 import argparse
 import numpy as np
 from loguru import logger
-from trackers.tracker import Tracker
-from AFLink.AppFreeLink import *
-from AFLink.model import PostLinker
-from AFLink.dataset import LinkData
-from trackers.tracker import Tracker
-from trackers.units import Detection
-from interpolation.GSI import gsi_interpolation
+from trackers.tracker import Tracker  # Correct import from trackers directory
+from trackers.metrics import NearestNeighborDistanceMetric  # For metric argument
+from postproc import AFLink, GSI  # Assuming these are in postproc directory
 
 def make_parser():
     parser = argparse.ArgumentParser("AdapTrack Tracking")
@@ -37,13 +33,23 @@ def main(opt):
     with open(opt.det_feat_path, 'rb') as f:
         det_feat = pickle.load(f)
 
-    # Initialize tracker
+    # Log loaded data structure
+    logger.info(f"Loaded detections with {len(det_feat)} frames")
+    sample_frame = next((fid for fid, dets in det_feat.items() if dets is not None), None)
+    if sample_frame:
+        logger.info(f"Sample frame {sample_frame}: {det_feat[sample_frame].shape} detections")
+
+    # Initialize tracker with required arguments
+    metric = NearestNeighborDistanceMetric()  # Default metric from AdapTrack
     tracker = Tracker(
+        metric=metric,  # Required argument
+        vid_name=opt.sequence_name,  # Required argument (e.g., "MOT20-01")
         max_distance=opt.max_distance,
         max_iou_distance=opt.max_iou_distance,
         min_len=opt.min_len,
         max_age=opt.max_age,
         ema_beta=opt.ema_beta,
+        gating_lambda=opt.gating_lambda
     )
 
     # Tracking loop
@@ -53,12 +59,17 @@ def main(opt):
         dets = det_feat[frame_id]
         if dets is None or dets.shape[0] == 0:
             tracker.predict()
-            tracker.update(np.empty((0, 5)), np.empty((0, dets.shape[1] - 5)) if dets is not None else None)
+            tracker.update(np.empty((0, 5)), np.empty((0, 0)))  # Empty features if no detections
+            logger.info(f"Frame {frame_id}: No detections")
         else:
+            # Verify detection format
+            if dets.shape[1] <= 5:
+                raise ValueError(f"Frame {frame_id}: No features found in detections (shape {dets.shape})")
+
             # Filter detections
-            boxes = dets[:, :4]
-            scores = dets[:, 4]
-            features = dets[:, 5:]
+            boxes = dets[:, :4]  # x1, y1, x2, y2
+            scores = dets[:, 4]  # confidence
+            features = dets[:, 5:]  # ReID features
             mask = (scores >= opt.conf_thresh) & \
                    ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) >= opt.min_area) & \
                    ((boxes[:, 2] - boxes[:, 0]) / (boxes[:, 3] - boxes[:, 1] + 1e-6) <= 1.6)
@@ -73,8 +84,9 @@ def main(opt):
         results[frame_id] = []
         for track in tracker.tracks:
             if track.is_confirmed() and track.time_since_update <= 1:
-                bbox = track.to_tlwh()
-                results[frame_id].append([track.track_id] + bbox.tolist() + [scores[track.last_idx] if track.last_idx >= 0 else 1.0])
+                bbox = track.to_tlwh()  # top-left width-height
+                score = scores[track.last_idx] if track.last_idx >= 0 and track.last_idx < len(scores) else 1.0
+                results[frame_id].append([track.track_id] + bbox.tolist() + [score])
 
         logger.info(f"Processed frame {frame_id}")
 
@@ -87,13 +99,13 @@ def main(opt):
         gsi = GSI(opt.sequence_name, results, interval=1000, tau=25)  # BoostTrack++ settings
         results = gsi.process()
 
-    # Save results
+    # Save results in MOT format
     os.makedirs(opt.output_dir, exist_ok=True)
     output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}.txt")
     with open(output_path, 'w') as f:
         for frame_id in sorted(results.keys(), key=int):
             for track in results[frame_id]:
-                f.write(f"{frame_id},{track[0]},{track[1]},{track[2]},{track[3]},{track[4]},{track[5]},-1,-1,-1\n")
+                f.write(f"{frame_id},{track[0]},{track[1]:.2f},{track[2]:.2f},{track[3]:.2f},{track[4]:.2f},{track[5]:.2f},-1,-1,-1\n")
     logger.info(f"Tracks saved to {output_path}")
 
 if __name__ == "__main__":
