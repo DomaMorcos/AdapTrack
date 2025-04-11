@@ -1,5 +1,4 @@
 import os
-import sys
 import pickle
 import argparse
 import numpy as np
@@ -8,6 +7,7 @@ from trackers.tracker import Tracker
 from trackers.metrics import NearestNeighborDistanceMetric
 from trackers.units import Detection
 from AFLink.AppFreeLink import AFLink
+from AFLink.model import PostLinker  # Import PostLinker from model.py
 from interpolation.GSI import gsi_interpolation as GSI
 import torch
 
@@ -135,7 +135,11 @@ def main(opt):
     logger.info("Starting post-processing")
     if "aflink" in opt.post_process:
         logger.debug("Running AFLink post-processing")
-        model = torch.load("/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", weights_only=True)
+        state_dict = torch.load("/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", weights_only=True)
+        model = PostLinker()
+        model.load_state_dict(state_dict)
+        model.cuda()
+        model.eval()
         dataset = InferenceDataset()
         aflink = AFLink(
             path_in=initial_output_path,
