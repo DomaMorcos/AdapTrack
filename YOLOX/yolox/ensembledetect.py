@@ -21,6 +21,9 @@ def make_parser():
     parser.add_argument("--exp_name", type=str, default="detections.pickle", help="Output pickle file name")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed for reproducibility")
     parser.add_argument("--fp16", action="store_true", help="Use FP16 precision")
+    # New arguments for filtering
+    parser.add_argument("--conf", type=float, default=0.1, help="Confidence threshold for detections")
+    parser.add_argument("--min_box_area", type=int, default=100, help="Minimum box area to keep")
     return parser
 
 def load_images(dataset_path):
@@ -62,12 +65,31 @@ def main(args):
     det_results = {}
     for frame_id, img in load_images(args.dataset_path):
         print(f"Processing frame {frame_id}", end="\r")
+        img_h, img_w = img.shape[:2]
         with torch.no_grad():
             preds = detector(img)  # [x1, y1, x2, y2, conf] from ensemble
         
-        # Convert to expected format
+        # Convert to numpy for filtering
         if preds.shape[0] > 0:
             dets = preds.cpu().numpy()  # [x1, y1, x2, y2, conf]
+            
+            # Apply confidence threshold
+            dets = dets[dets[:, 4] >= args.conf]
+            
+            # Ensure boxes are within image bounds
+            dets[:, 0] = np.maximum(dets[:, 0], 0)  # x1
+            dets[:, 1] = np.maximum(dets[:, 1], 0)  # y1
+            dets[:, 2] = np.minimum(dets[:, 2], img_w - 1)  # x2
+            dets[:, 3] = np.minimum(dets[:, 3], img_h - 1)  # y3
+            
+            # Filter out invalid boxes (non-positive width/height)
+            valid_mask = (dets[:, 2] - dets[:, 0] > 0) & (dets[:, 3] - dets[:, 1] > 0)
+            dets = dets[valid_mask]
+            
+            # Apply minimum box area filter
+            if len(dets) > 0:
+                areas = (dets[:, 2] - dets[:, 0]) * (dets[:, 3] - dets[:, 1])
+                dets = dets[areas >= args.min_box_area]
         else:
             dets = np.zeros((0, 5), dtype=np.float32)
         
