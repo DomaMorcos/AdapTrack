@@ -8,8 +8,8 @@ from trackers.tracker import Tracker
 from trackers.metrics import NearestNeighborDistanceMetric
 from trackers.units import Detection
 from AFLink.AppFreeLink import AFLink
-from AFLink.model import PostLinker  # Import PostLinker from model.py
-from interpolation.GSI import gsi_interpolation as GSI
+from AFLink.model import PostLinker
+from interpolation.GSI import gsi_interpolation
 import torch
 
 logger.remove()
@@ -134,6 +134,7 @@ def main(opt):
                 f.write(f"{frame_id},{track[0]},{track[1]:.2f},{track[2]:.2f},{track[3]:.2f},{track[4]:.2f},{track[5]:.2f}\n")
 
     logger.info("Starting post-processing")
+    gsi_input_path = initial_output_path  # Default to initial tracks
     if "aflink" in opt.post_process:
         logger.debug("Running AFLink post-processing")
         state_dict = torch.load("/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", weights_only=True)
@@ -153,11 +154,21 @@ def main(opt):
         )
         aflink.link()
         logger.debug("AFLink post-processing completed")
+        gsi_input_path = os.path.join(opt.output_dir, f"{opt.sequence_name}_aflink.txt")  # Use AFLink output for GSI
 
     if "interpolation" in opt.post_process:
         logger.debug("Running GSI interpolation")
-        gsi = GSI(opt.sequence_name, results, interval=1000, tau=25)
-        results = gsi.process()
+        gsi_output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}_gsi.txt")
+        gsi_interpolation(gsi_input_path, gsi_output_path, interval=1000, tau=25)
+        # Load GSI output to update results
+        gsi_results = np.loadtxt(gsi_output_path, delimiter=',')
+        results = {}
+        for row in gsi_results:
+            frame_id, track_id, x, y, w, h = row[:6]
+            frame_id = int(frame_id)
+            if frame_id not in results:
+                results[frame_id] = []
+            results[frame_id].append([int(track_id), x, y, w, h, 1.0])
         logger.debug("GSI interpolation completed")
 
     logger.info("Saving final tracks")
