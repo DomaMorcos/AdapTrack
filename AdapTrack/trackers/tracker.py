@@ -65,7 +65,7 @@ class Tracker:
             print(f"Match results: {len(matches)} matches, {len(unmatched_tracks)} unmatched tracks, {len(unmatched_detections)} unmatched detections")
         return matches, unmatched_tracks, unmatched_detections
 
-    def update(self, detections):
+    def update(self, detections, track_coords, det_coords):
         matches, unmatched_tracks, unmatched_detections = self.match(detections)
         new_tracks = []  # List of (track_id, coords) for newly initiated tracks
         for track_idx, detection_idx in matches:
@@ -76,9 +76,15 @@ class Tracker:
             if detections[detection_idx].confidence >= self.conf_thresh:
                 track_id, coords = self.initiate_track(detections[detection_idx])
                 new_tracks.append((track_id, coords))
+                track_coords[track_id] = coords
         
-        # Compute matched track IDs before deletion
-        matched_track_ids = [self.tracks[track_idx].track_id for track_idx, _ in matches]
+        # Compute matched track IDs and update track_coords before deletion
+        matched_track_ids = []
+        for track_idx, det_idx in matches:
+            track_id = self.tracks[track_idx].track_id
+            matched_track_ids.append(track_id)
+            # Update track_coords with the detection coordinates
+            track_coords[track_id] = det_coords[det_idx]
         
         # Debug: Log tracks before and after deletion
         if len(self.tracks) < 100:
@@ -94,4 +100,4 @@ class Tracker:
             features += track.features
             targets += [track.track_id for _ in track.features]
         self.metric.partial_fit(np.asarray(features), np.asarray(targets), active_targets)
-        return matches, new_tracks, matched_track_ids  # Return matches, new tracks, and matched track IDs
+        return new_tracks, matched_track_ids, track_coords  # Return new tracks, matched track IDs, and updated track_coords

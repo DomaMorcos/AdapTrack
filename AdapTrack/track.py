@@ -128,10 +128,7 @@ def main(opt):
         dets = frame_data[frame_id]
         if dets is None or dets.shape[0] == 0:
             tracker.predict()
-            matches, new_tracks, matched_track_ids = tracker.update([])
-            # Initialize track_coords for new tracks
-            for track_id, coords in new_tracks:
-                track_coords[track_id] = coords
+            new_tracks, matched_track_ids, track_coords = tracker.update([], track_coords, {})
             if frame_id <= 5:
                 logger.info(f"Frame {frame_id}: After adding new tracks, track_coords keys: {set(track_coords.keys())}")
             results[frame_id] = []
@@ -200,7 +197,11 @@ def main(opt):
             visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
                              os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
 
-            matches, new_tracks, matched_track_ids = tracker.update(detections)
+            # Debug: Log track_coords before update
+            if frame_id <= 5:
+                logger.info(f"Frame {frame_id}: Before update, track_coords keys: {set(track_coords.keys())}")
+
+            new_tracks, matched_track_ids, track_coords = tracker.update(detections, track_coords, det_coords)
 
             # Debug: Log new tracks and matched track IDs
             if frame_id <= 5:
@@ -213,38 +214,8 @@ def main(opt):
                     if track.track_id == 48:
                         logger.info(f"Frame {frame_id}: Track 48 - time_since_update={track.time_since_update}, is_deleted={track.is_deleted()}")
 
-            # Debug: Log track_coords before adding new tracks
             if frame_id <= 5:
-                logger.info(f"Frame {frame_id}: Before adding new tracks, track_coords keys: {set(track_coords.keys())}")
-
-            # Initialize track_coords for new tracks before processing matches
-            for track_id, coords in new_tracks:
-                track_coords[track_id] = coords
-
-            if frame_id <= 5:
-                logger.info(f"Frame {frame_id}: After adding new tracks, track_coords keys: {set(track_coords.keys())}")
-
-            # Debug: Log matches and track_coords before updating
-            if frame_id <= 5:
-                logger.info(f"Frame {frame_id}: Matches (track_idx, det_idx): {matches}")
-                logger.info(f"Frame {frame_id}: Before updating matches, track_coords keys: {set(track_coords.keys())}")
-
-            # Update track coordinates based on matches
-            for track_idx, det_idx in matches:
-                track_id = tracker.tracks[track_idx].track_id
-                if frame_id <= 5:
-                    logger.info(f"Frame {frame_id}: Updating track_id {track_id} with det_idx {det_idx}")
-                if track_id not in track_coords:
-                    # Fallback: Initialize with predicted coordinates if missing
-                    bbox = tracker.tracks[track_idx].to_tlwh()
-                    x1, y1, w, h = bbox
-                    x2, y2 = x1 + w, y1 + h
-                    track_coords[track_id] = [x1, y1, x2, y2]
-                    logger.warning(f"Frame {frame_id}: Track ID {track_id} not in track_coords, initialized with predicted coords")
-                track_coords[track_id] = det_coords[det_idx]
-
-            if frame_id <= 5:
-                logger.info(f"Frame {frame_id}: After updating matches, track_coords keys: {set(track_coords.keys())}")
+                logger.info(f"Frame {frame_id}: After update, track_coords keys: {set(track_coords.keys())}")
 
             results[frame_id] = []
             for track in tracker.tracks:
