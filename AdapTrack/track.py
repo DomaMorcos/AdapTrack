@@ -60,7 +60,7 @@ def visualize_xyxy_detections(img, dets, frame_id, output_dir, vis_interval, sta
         x1, y1, x2, y2 = det[:4]
         score = det[4] if len(det) > 4 else 1.0
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-        logger.debug(f"Frame {frame_id} {stage} det {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
+        # logger.debug(f"Frame {frame_id} {stage} det {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
         cv2.rectangle(img_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(img_vis, f"s:{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
     os.makedirs(output_dir, exist_ok=True)
@@ -82,7 +82,7 @@ def visualize_tracks(img, tracks, frame_id, stage, output_dir, vis_interval, img
     for track in tracks:
         track_id, x1, y1, x2, y2, score = track[:6]
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-        logger.debug(f"Frame {frame_id} {stage} track {track_id}: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+        # logger.debug(f"Frame {frame_id} {stage} track {track_id}: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
         color = get_color(int(track_id))
         cv2.rectangle(img_vis, (x1, y1), (x2, y2), color, 2)
         cv2.putText(img_vis, f"ID:{int(track_id)} s:{score:.2f}", (x1, y1-10), 
@@ -166,7 +166,7 @@ def main(opt):
             scores = dets[:, 4]
             features = dets[:, 5:]
             logger.debug(f"Frame {frame_id}: {len(boxes)} detections before filtering")
-            logger.debug(f"Frame {frame_id} input boxes [x1, y1, x2, y2]: {boxes[:5]}")
+            # logger.debug(f"Frame {frame_id} input boxes [x1, y1, x2, y2]: {boxes[:5]}")
 
             # Visualize raw detections before tracking
             visualize_xyxy_detections(None, dets, frame_id, os.path.join(opt.output_dir, "raw_dets_vis"), 
