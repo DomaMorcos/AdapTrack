@@ -1,12 +1,12 @@
 import os
 import torch
 from torch import nn
-import AFLink.config as cfg
+import config as cfg
 from torch.optim import Adam
 from datetime import datetime
 from os.path import join, exists
-from AFLink.model import PostLinker
-from AFLink.dataset import LinkData
+from model import PostLinker
+from dataset import LinkData
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
