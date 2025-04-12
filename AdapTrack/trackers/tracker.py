@@ -20,7 +20,7 @@ class Tracker:
 
     def initiate_track(self, detection):
         cxcyah = detection.to_cxcyah()
-        print(f"Initiating track {self.next_id} with cxcyah: {cxcyah}")
+        # print(f"Initiating track {self.next_id} with cxcyah: {cxcyah}")
         self.tracks.append(Track(cxcyah, self.next_id, detection.confidence, detection.feature,
                                  conf_thresh=self.conf_thresh, min_len=self.min_len, ema_beta=self.ema_beta, max_age=self.max_age))
         self.next_id += 1
