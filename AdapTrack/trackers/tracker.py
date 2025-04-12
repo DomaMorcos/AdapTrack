@@ -19,13 +19,9 @@ class Tracker:
         self.cmc = CMC(vid_name)
 
     def initiate_track(self, detection):
-        cxcyah = detection.to_cxcyah()
-        self.tracks.append(Track(cxcyah, self.next_id, detection.confidence, detection.feature,
+        self.tracks.append(Track(detection.to_cxcyah(), self.next_id, detection.confidence, detection.feature,
                                  conf_thresh=self.conf_thresh, min_len=self.min_len, ema_beta=self.ema_beta, max_age=self.max_age))
-        new_track_id = self.next_id
         self.next_id += 1
-        x1, y1, x2, y2 = detection.tlbr
-        return new_track_id, [x1, y1, x2, y2]
 
     def predict(self):
         for track in self.tracks:
@@ -65,33 +61,16 @@ class Tracker:
             print(f"Match results: {len(matches)} matches, {len(unmatched_tracks)} unmatched tracks, {len(unmatched_detections)} unmatched detections")
         return matches, unmatched_tracks, unmatched_detections
 
-    def update(self, detections, track_coords, det_coords):
+    def update(self, detections):
         matches, unmatched_tracks, unmatched_detections = self.match(detections)
-        new_tracks = []  # List of (track_id, coords) for newly initiated tracks
         for track_idx, detection_idx in matches:
             self.tracks[track_idx].update(detections[detection_idx])
         for track_idx in unmatched_tracks:
             self.tracks[track_idx].mark_missed()
         for detection_idx in unmatched_detections:
             if detections[detection_idx].confidence >= self.conf_thresh:
-                track_id, coords = self.initiate_track(detections[detection_idx])
-                new_tracks.append((track_id, coords))
-                track_coords[track_id] = coords
-        
-        # Compute matched track IDs and update track_coords before deletion
-        matched_track_ids = []
-        for track_idx, det_idx in matches:
-            track_id = self.tracks[track_idx].track_id
-            matched_track_ids.append(track_id)
-            # Update track_coords with the detection coordinates
-            track_coords[track_id] = det_coords[det_idx]
-        
-        # Debug: Log tracks before and after deletion
-        if len(self.tracks) < 100:
-            print(f"Before deletion: {[t.track_id for t in self.tracks]}")
+                self.initiate_track(detections[detection_idx])
         self.tracks = [t for t in self.tracks if not t.is_deleted()]
-        if len(self.tracks) < 100:
-            print(f"After deletion: {[t.track_id for t in self.tracks]}")
         active_targets = [t.track_id for t in self.tracks if t.is_confirmed()]
         features, targets = [], []
         for track in self.tracks:
@@ -100,4 +79,3 @@ class Tracker:
             features += track.features
             targets += [track.track_id for _ in track.features]
         self.metric.partial_fit(np.asarray(features), np.asarray(targets), active_targets)
-        return new_tracks, matched_track_ids, track_coords  # Return new tracks, matched track IDs, and updated track_coords

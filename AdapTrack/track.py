@@ -119,8 +119,6 @@ def main(opt):
         conf_thresh=opt.conf_thresh
     )
 
-    # Store original coordinates per track_id
-    track_coords = {}  # track_id -> [x1, y1, x2, y2]
     results = {}
     frame_ids = sorted(frame_data.keys(), key=int)
 
@@ -128,9 +126,7 @@ def main(opt):
         dets = frame_data[frame_id]
         if dets is None or dets.shape[0] == 0:
             tracker.predict()
-            new_tracks, matched_track_ids, track_coords = tracker.update([], track_coords, {})
-            if frame_id <= 5:
-                logger.info(f"Frame {frame_id}: After adding new tracks, track_coords keys: {set(track_coords.keys())}")
+            tracker.update([])
             results[frame_id] = []
         else:
             if dets.shape[1] <= 5:
@@ -141,7 +137,6 @@ def main(opt):
             features = dets[:, 5:]
             logger.info(f"Frame {frame_id}: {len(boxes)} pedestrians before filtering")
 
-            # Log feature statistics
             if frame_id <= 3:
                 logger.info(f"Frame {frame_id}: Feature shape {features.shape}, mean {np.mean(features):.2f}, std {np.std(features):.2f}, min {np.min(features):.2f}, max {np.max(features):.2f}")
                 norms = np.linalg.norm(features, axis=1)
@@ -160,83 +155,42 @@ def main(opt):
 
             detections = [Detection(bbox, score, feature) for bbox, score, feature in zip(boxes, scores, features)]
 
-            # Store original coordinates for new detections
-            det_coords = {i: det.tlbr.tolist() for i, det in enumerate(detections)}
-
+            # Visualize tracks before prediction
             pre_predict_tracks = []
             for track in tracker.tracks:
                 if track.is_confirmed() and track.time_since_update <= 1:
                     bbox = track.to_tlwh()
+                    x1, y1, w, h = bbox
+                    x2, y2 = x1 + w, y1 + h
                     score = track.confidence if hasattr(track, 'confidence') else 1.0
-                    coords = track_coords.get(track.track_id, None)
-                    if coords:
-                        pre_predict_tracks.append([track.track_id] + coords + [score])
-                    else:
-                        x1, y1, w, h = bbox
-                        x2, y2 = x1 + w, y1 + h
-                        pre_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
-                        track_coords[track.track_id] = [x1, y1, x2, y2]
+                    pre_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
             visualize_tracks(None, pre_predict_tracks, frame_id, "pre_predict", 
                              os.path.join(opt.output_dir, "pre_predict_vis"), opt.vis_interval, opt.image_dir)
 
             tracker.predict()
 
+            # Visualize tracks after prediction
             post_predict_tracks = []
             for track in tracker.tracks:
                 if track.is_confirmed() and track.time_since_update <= 1:
                     bbox = track.to_tlwh()
+                    x1, y1, w, h = bbox
+                    x2, y2 = x1 + w, y1 + h
                     score = track.confidence if hasattr(track, 'confidence') else 1.0
-                    coords = track_coords.get(track.track_id, None)
-                    if coords:
-                        post_predict_tracks.append([track.track_id] + coords + [score])
-                    else:
-                        x1, y1, w, h = bbox
-                        x2, y2 = x1 + w, y1 + h
-                        post_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
-                        track_coords[track.track_id] = [x1, y1, x2, y2]
+                    post_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
             visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
                              os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
 
-            # Debug: Log track_coords before update
-            if frame_id <= 5:
-                logger.info(f"Frame {frame_id}: Before update, track_coords keys: {set(track_coords.keys())}")
-
-            new_tracks, matched_track_ids, track_coords = tracker.update(detections, track_coords, det_coords)
-
-            # Debug: Log new tracks and matched track IDs
-            if frame_id <= 5:
-                logger.info(f"Frame {frame_id}: New tracks {[(tid, coords) for tid, coords in new_tracks]}")
-                logger.info(f"Frame {frame_id}: Matched track IDs {matched_track_ids}")
-
-            # Debug: Log state of track 48
-            if frame_id <= 5:
-                for track in tracker.tracks:
-                    if track.track_id == 48:
-                        logger.info(f"Frame {frame_id}: Track 48 - time_since_update={track.time_since_update}, is_deleted={track.is_deleted()}")
-
-            if frame_id <= 5:
-                logger.info(f"Frame {frame_id}: After update, track_coords keys: {set(track_coords.keys())}")
+            tracker.update(detections)
 
             results[frame_id] = []
             for track in tracker.tracks:
                 if track.is_confirmed() and track.time_since_update <= 1:
+                    bbox = track.to_tlwh()
+                    x1, y1, w, h = bbox
+                    x2, y2 = x1 + w, y1 + h
                     score = track.confidence if hasattr(track, 'confidence') else 1.0
-                    track_id = track.track_id
-                    if track_id not in track_coords:
-                        bbox = track.to_tlwh()
-                        x1, y1, w, h = bbox
-                        x2, y2 = x1 + w, y1 + h
-                        track_coords[track_id] = [x1, y1, x2, y2]
-                        logger.warning(f"Frame {frame_id}: Track ID {track_id} not in track_coords during results, initialized with predicted coords")
-                    coords = track_coords[track_id]
-                    results[frame_id].append([track.track_id] + coords + [score])
-
-            # Prune coordinates for deleted tracks
-            active_track_ids = {track.track_id for track in tracker.tracks if not track.is_deleted()}
-            if frame_id <= 5:
-                removed_ids = set(track_coords.keys()) - active_track_ids
-                logger.info(f"Frame {frame_id}: Pruning track_coords, removed IDs {removed_ids}")
-            track_coords = {tid: coords for tid, coords in track_coords.items() if tid in active_track_ids}
+                    results[frame_id].append([track.track_id, x1, y1, x2, y2, score])
 
         visualize_tracks(None, results[frame_id], frame_id, "initial", 
                          os.path.join(opt.output_dir, "initial_vis"), opt.vis_interval, opt.image_dir)

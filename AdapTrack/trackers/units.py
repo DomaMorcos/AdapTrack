@@ -75,8 +75,9 @@ class Track:
         return ret
 
     def mark_missed(self):
-        # Only delete if time_since_update exceeds max_age, regardless of state
-        if self.time_since_update > self.max_age:
+        if self.state == TrackState.Tentative:
+            self.state = TrackState.Deleted
+        elif self.time_since_update > self.max_age:
             self.state = TrackState.Deleted
 
     def is_tentative(self):
