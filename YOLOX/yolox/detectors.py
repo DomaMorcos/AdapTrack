@@ -7,15 +7,11 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import numpy as np
 import cv2
-from ensemble_boxes import weighted_boxes_fusion 
-
-
+from ensemble_boxes import weighted_boxes_fusion
 
 from torchvision.models.detection import FasterRCNN
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-
-
 
 from abc import ABC, abstractmethod
 
@@ -29,17 +25,18 @@ class YoloDetector(Detector):
         self.model = YOLO(yolo_path)
 
     def __call__(self, img):
-        results = self.model(img)[0]  # Let Ultralytics scale to input resolution
+        # Get raw predictions from Ultralytics YOLO
+        results = self.model(img, verbose=False)[0]  # Disable verbose output
         annotations = []
         for box in results.boxes:
             if int(box.cls) == 0:  # Only keep 'person' class (class ID 0)
                 xyxy = box.xyxy[0].tolist()  # [x_min, y_min, x_max, y_max]
                 conf = box.conf[0].item()
-                annotations.append(xyxy + [conf])
-        return torch.tensor(annotations, dtype=torch.float32) if annotations else torch.zeros((0, 5), dtype=torch.float32)
-
-# EnsembleDetector remains unchanged as it assumes original resolution inputs
-    
+                # YOLOX expects [x1, y1, x2, y2, obj_score, class_score]
+                # Use conf as both objectness score and class score for pedestrian
+                annotations.append(xyxy + [conf, conf])
+        # Return tensor in the format expected by YOLOX postprocess
+        return torch.tensor(annotations, dtype=torch.float32) if annotations else torch.zeros((0, 6), dtype=torch.float32)
 
 # Faster R-CNN Detector (removed conf_threshold)
 class FasterRCNNDetector:
@@ -107,15 +104,13 @@ class FasterRCNNDetector:
             boxes[:, 1] *= scale_y  # y1
             boxes[:, 2] *= scale_x  # x2
             boxes[:, 3] *= scale_y  # y2
-            annotations = torch.cat((boxes, scores.unsqueeze(1)), dim=1)
+            # YOLOX expects [x1, y1, x2, y2, obj_score, class_score]
+            # Use score as both objectness and class score
+            annotations = torch.cat((boxes, scores.unsqueeze(1), scores.unsqueeze(1)), dim=1)
         else:
-            annotations = torch.zeros((0, 5))
+            annotations = torch.zeros((0, 6))
         
         return annotations
-
-
-
-# In detectors.py
 
 class EnsembleDetector(Detector):
     def __init__(self, model1: Detector, model2: Detector, model1_weight=0.7, model2_weight=0.3, iou_thresh=0.6, conf_thresh=0.3):
@@ -177,8 +172,9 @@ class EnsembleDetector(Detector):
         # Scale back to original resolution
         if len(boxes) > 0:
             boxes = boxes * np.array([orig_w, orig_h, orig_w, orig_h])
-            annotations = torch.tensor(np.hstack((boxes, scores[:, np.newaxis])), dtype=torch.float32)
+            # YOLOX expects [x1, y1, x2, y2, obj_score, class_score]
+            annotations = torch.tensor(np.hstack((boxes, scores[:, np.newaxis], scores[:, np.newaxis])), dtype=torch.float32)
         else:
-            annotations = torch.zeros((0, 5), dtype=torch.float32)
+            annotations = torch.zeros((0, 6), dtype=torch.float32)
 
         return annotations
