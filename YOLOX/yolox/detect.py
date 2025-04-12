@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from yolox.data.data_augment import ValTransform
 from yolox.utils import postprocess
-from detectors import YoloDetector
+from detectors import YoloDetector, EnsembleDetector
 from configparser import ConfigParser
 import threading
 
@@ -51,23 +51,51 @@ def xyxy2cxcywh(boxes):
     h = (boxes[:, 3] - boxes[:, 1])
     return torch.stack((cx, cy, w, h), dim=1)
 
-def visualize_detections(img, dets, frame_id, output_dir, vis_interval):
+def visualize_xyxy_detections(img, dets, frame_id, output_dir, vis_interval, stage_name, img_size=None):
     if frame_id % vis_interval != 0:
         return
     if dets is None or len(dets) == 0:
+        logger.info(f"No detections to visualize at stage {stage_name} for frame {frame_id}")
         return
-    img_vis = img.copy()
-    for det in dets:
-        x, y, w, h, score = det[:5]
-        x1 = int(x - w/2)
-        y1 = int(y - h/2)
-        x2 = int(x + w/2)
-        y2 = int(y + h/2)
-        cv2.rectangle(img_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(img_vis, f"{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    # Resize image to match the detection space if specified
+    if img_size is not None:
+        vis_img = cv2.resize(img, (img_size[1], img_size[0]))
+    else:
+        vis_img = img.copy()
+    for i, det in enumerate(dets):
+        x1, y1, x2, y2 = det[:4].cpu().numpy().astype(int)
+        score = det[4].cpu().numpy() if len(det) > 4 else 0.0
+        cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(vis_img, f"{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        logger.debug(f"{stage_name} detection {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
     os.makedirs(output_dir, exist_ok=True)
-    cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}.jpg"), img_vis)
-    logger.info(f"Saved detection visualization for frame {frame_id}")
+    cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}_{stage_name}.jpg"), vis_img)
+    logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
+
+def visualize_cxcywh_detections(img, dets, frame_id, output_dir, vis_interval, stage_name, img_size=None):
+    if frame_id % vis_interval != 0:
+        return
+    if dets is None or len(dets) == 0:
+        logger.info(f"No detections to visualize at stage {stage_name} for frame {frame_id}")
+        return
+    # Resize image to match the detection space if specified
+    if img_size is not None:
+        vis_img = cv2.resize(img, (img_size[1], img_size[0]))
+    else:
+        vis_img = img.copy()
+    for i, det in enumerate(dets):
+        cx, cy, w, h = det[:4].cpu().numpy().astype(int)
+        score = det[4].cpu().numpy() if len(det) > 4 else 0.0
+        x1 = int(cx - w/2)
+        y1 = int(cy - h/2)
+        x2 = int(cx + w/2)
+        y2 = int(cy + h/2)
+        cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(vis_img, f"{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        logger.debug(f"{stage_name} detection {i}: cx={cx}, cy={cy}, w={w}, h={h}, score={score:.2f}")
+    os.makedirs(output_dir, exist_ok=True)
+    cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}_{stage_name}.jpg"), vis_img)
+    logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
 
 def run_detector(detector, img_tensor_np, output_list, index):
     with torch.no_grad():
@@ -92,11 +120,20 @@ def main(args):
     seq_length = seq_info["seqLength"]
     orig_size = (seq_info["imHeight"], seq_info["imWidth"])
     im_ext = seq_info["imExt"]
+    logger.info(f"Original image size: {orig_size}, Resized image size: {img_size}")
 
     preproc = ValTransform(rgb_means=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 
     detector1 = YoloDetector(yolo_path=args.model1_path)
     detector2 = YoloDetector(yolo_path=args.model2_path)
+    ensemble_detector = EnsembleDetector(
+        model1=detector1,
+        model2=detector2,
+        model1_weight=args.model1_weight,
+        model2_weight=args.model2_weight,
+        iou_thresh=0.6,
+        conf_thresh=0.3
+    )
 
     if args.fp16:
         logger.info("Using FP16 inference")
@@ -168,6 +205,19 @@ def main(args):
             logger.debug(f"Model 1 output shape: {outputs1.shape}")
             logger.debug(f"Model 2 output shape: {outputs2.shape}")
 
+            # Visualize raw outputs from Model 1 and Model 2 (in resized image space: 608x1088)
+            visualize_xyxy_detections(img, outputs1, frame_id, vis_dir, args.vis_interval, "model1_raw", img_size=img_size)
+            visualize_xyxy_detections(img, outputs2, frame_id, vis_dir, args.vis_interval, "model2_raw", img_size=img_size)
+
+            # Run EnsembleDetector
+            ensemble_outputs = ensemble_detector(img_np)
+            ensemble_outputs = ensemble_outputs.cuda()
+            logger.debug(f"Ensemble output shape: {ensemble_outputs.shape}")
+            if ensemble_outputs.shape[0] > 0:
+                logger.debug(f"Ensemble scores: {ensemble_outputs[:, 4]}")
+            # Visualize ensemble outputs (in original image space: 1920x1080)
+            visualize_xyxy_detections(img, ensemble_outputs, frame_id, vis_dir, args.vis_interval, "ensemble", img_size=None)
+
             # Convert to YOLOX format: [cx, cy, w, h, conf, class_score]
             # Since we only have one class (pedestrians), duplicate conf as class_score
             if outputs1.shape[0] > 0:
@@ -188,6 +238,10 @@ def main(args):
             else:
                 outputs2_yolox = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
 
+            # Visualize after conversion to YOLOX format (in resized image space: 608x1088)
+            visualize_cxcywh_detections(img, outputs1_yolox, frame_id, vis_dir, args.vis_interval, "model1_yolox", img_size=img_size)
+            visualize_cxcywh_detections(img, outputs2_yolox, frame_id, vis_dir, args.vis_interval, "model2_yolox", img_size=img_size)
+
             # Combine outputs and apply weights
             combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)
             if combined.shape[0] > 0:
@@ -203,8 +257,8 @@ def main(args):
                 outputs = torch.zeros((1, 0, 6), device='cuda')
                 logger.info(f"Frame {frame_id}: 0 detections before NMS")
 
-            # Debug raw detections before postprocess
-            logger.debug(f"Raw detections before postprocess: {outputs}")
+            # Visualize after weighting (in resized image space: 608x1088)
+            visualize_cxcywh_detections(img, outputs[0], frame_id, vis_dir, args.vis_interval, "after_weighting", img_size=img_size)
 
             # Postprocess (expects [cx, cy, w, h, obj_score, class_score])
             outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
@@ -215,18 +269,23 @@ def main(args):
                 outputs = None
                 logger.info(f"Frame {frame_id}: 0 detections after NMS")
 
+            # Visualize after postprocessing (in resized image space: 608x1088)
+            if outputs is not None:
+                visualize_xyxy_detections(img, outputs[:, :6], frame_id, vis_dir, args.vis_interval, "after_postprocess", img_size=img_size)
+
         if outputs is not None:
             det = outputs[:, :6].cpu().numpy()  # [x1, y1, x2, y2, obj_score, class_score]
             det[:, 4] *= det[:, 5]  # Combine objectness and class score
             det = det[:, :5]  # Keep only [x1, y1, x2, y2, score]
             scale = min(img_size[0] / orig_size[0], img_size[1] / orig_size[1])
+            logger.info(f"Final scaling factor: {scale}")
             det[:, :4] /= scale  # Scale back to original resolution
             det_results[video_name][frame_id] = det
         else:
             det_results[video_name][frame_id] = None
 
-        # Visualize detections
-        visualize_detections(img, det_results[video_name][frame_id], frame_id, vis_dir, args.vis_interval)
+        # Visualize final detections (in original image space: 1920x1080)
+        visualize_xyxy_detections(img, torch.tensor(det) if det is not None else None, frame_id, vis_dir, args.vis_interval, "final", img_size=None)
         logger.info(f"Processed frame {frame_id} for {video_name}")
 
     os.makedirs(args.output_folder, exist_ok=True)
