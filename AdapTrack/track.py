@@ -80,12 +80,9 @@ def visualize_tracks(img, tracks, frame_id, stage, output_dir, vis_interval, img
             return
     img_vis = img.copy()
     for track in tracks:
-        track_id, x, y, w, h, score = track[:6]
-        x1 = int(x - w/2)
-        y1 = int(y - h/2)
-        x2 = int(x + w/2)
-        y2 = int(y + h/2)
-        logger.debug(f"Frame {frame_id} {stage} track {track_id}: x={x}, y={y}, w={w}, h={h}, converted to x1={x1}, y1={y1}, x2={x2}, y2={y2}")
+        track_id, x1, y1, x2, y2, score = track[:6]
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        logger.debug(f"Frame {frame_id} {stage} track {track_id}: x1={x1}, y1={y1}, x2={x2}, y2={y2}")
         color = get_color(int(track_id))
         cv2.rectangle(img_vis, (x1, y1), (x2, y2), color, 2)
         cv2.putText(img_vis, f"ID:{int(track_id)} s:{score:.2f}", (x1, y1-10), 
@@ -121,11 +118,9 @@ def main(opt):
     with open(opt.det_feat_path, 'rb') as f:
         det_feat = pickle.load(f)
 
-    # Extract the video name (should match opt.sequence_name) and get the frame data
     if not det_feat or not isinstance(det_feat, dict):
         raise ValueError("Detection pickle file is empty or not a dictionary")
     
-    # Assuming det_feat is {vid_name: {frame_id: dets}}
     vid_name = opt.sequence_name
     if vid_name not in det_feat:
         raise KeyError(f"Video name '{vid_name}' not found in detection pickle. Available keys: {list(det_feat.keys())}")
@@ -133,7 +128,6 @@ def main(opt):
     frame_data = det_feat[vid_name]
     logger.info(f"Loaded detections for video '{vid_name}' with {len(frame_data)} frames")
 
-    # Find a sample frame with detections
     sample_frame = next((fid for fid, dets in frame_data.items() if dets is not None and len(dets) > 0), None)
     if sample_frame:
         logger.info(f"Sample frame {sample_frame}: {frame_data[sample_frame].shape} detections")
@@ -149,6 +143,9 @@ def main(opt):
         ema_beta=opt.ema_beta,
         conf_thresh=opt.conf_thresh
     )
+
+    # Dictionary to store original [x1, y1, x2, y2] coordinates for each track
+    track_original_coords = {}  # (track_id, frame_id) -> [x1, y1, x2, y2]
 
     results = {}
     frame_ids = sorted(frame_data.keys(), key=int)
@@ -186,28 +183,77 @@ def main(opt):
             detections = [Detection(bbox, score, feature) for bbox, score, feature in zip(boxes, scores, features)]
             logger.debug(f"Frame {frame_id}: Created {len(detections)} Detection objects")
 
-            # Visualize tracks before prediction (initial state of tracks)
+            # Store original coordinates for new detections
+            for i, det in enumerate(detections):
+                det_key = (frame_id, i)
+                track_original_coords[det_key] = det.tlbr.tolist()
+
+            # Visualize tracks before prediction
             pre_predict_tracks = []
             for track in tracker.tracks:
                 if track.is_confirmed() and track.time_since_update <= 1:
-                    bbox = track.to_tlwh()
+                    bbox = track.to_tlwh()  # [x1, y1, w, h]
                     score = track.confidence if hasattr(track, 'confidence') else 1.0
-                    pre_predict_tracks.append([track.track_id] + bbox.tolist() + [score])
-            logger.debug(f"Frame {frame_id} pre-predict tracks [track_id, x, y, w, h, score]: {pre_predict_tracks[:5]}")
+                    # Find the most recent original coordinates for this track
+                    found = False
+                    for f_id in range(frame_id, 0, -1):
+                        for i in range(len(frame_data.get(f_id, []))):
+                            key = (f_id, i)
+                            if key in track_original_coords:
+                                orig_bbox = track_original_coords[key]
+                                orig_x1, orig_y1, orig_x2, orig_y2 = orig_bbox
+                                orig_x = (orig_x1 + orig_x2) / 2
+                                orig_y = (orig_y1 + orig_y2) / 2
+                                curr_x1, curr_y1 = bbox[0], bbox[1]
+                                if np.allclose([orig_x, orig_y], [curr_x1 + bbox[2]/2, curr_y1 + bbox[3]/2], atol=20):
+                                    pre_predict_tracks.append([track.track_id, orig_x1, orig_y1, orig_x2, orig_y2, score])
+                                    found = True
+                                    break
+                        if found:
+                            break
+                    if not found:
+                        x1, y1, w, h = bbox
+                        x2 = x1 + w
+                        y2 = y1 + h
+                        pre_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
+            logger.debug(f"Frame {frame_id} pre-predict tracks: {pre_predict_tracks[:5]}")
             visualize_tracks(None, pre_predict_tracks, frame_id, "pre_predict", 
                              os.path.join(opt.output_dir, "pre_predict_vis"), opt.vis_interval, opt.image_dir)
 
             logger.debug(f"Frame {frame_id}: Predicting")
             tracker.predict()
 
-            # Visualize tracks after prediction but before update
+            # Visualize tracks after prediction
             post_predict_tracks = []
             for track in tracker.tracks:
                 if track.is_confirmed() and track.time_since_update <= 1:
                     bbox = track.to_tlwh()
                     score = track.confidence if hasattr(track, 'confidence') else 1.0
-                    post_predict_tracks.append([track.track_id] + bbox.tolist() + [score])
-            logger.debug(f"Frame {frame_id} post-predict tracks [track_id, x, y, w, h, score]: {post_predict_tracks[:5]}")
+                    found = False
+                    for f_id in range(frame_id, 0, -1):
+                        for i in range(len(frame_data.get(f_id, []))):
+                            key = (f_id, i)
+                            if key in track_original_coords:
+                                orig_bbox = track_original_coords[key]
+                                orig_x1, orig_y1, orig_x2, orig_y2 = orig_bbox
+                                orig_x = (orig_x1 + orig_x2) / 2
+                                orig_y = (orig_y1 + orig_y2) / 2
+                                curr_x1, curr_y1 = bbox[0], bbox[1]
+                                if np.allclose([orig_x, orig_y], [curr_x1 + bbox[2]/2, curr_y1 + bbox[3]/2], atol=20):
+                                    post_predict_tracks.append([track.track_id, orig_x1, orig_y1, orig_x2, orig_y2, score])
+                                    found = True
+                                    # Update the track's coordinates for future frames
+                                    track_original_coords[(track.track_id, frame_id)] = orig_bbox
+                                    break
+                        if found:
+                            break
+                    if not found:
+                        x1, y1, w, h = bbox
+                        x2 = x1 + w
+                        y2 = y1 + h
+                        post_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
+                        track_original_coords[(track.track_id, frame_id)] = [x1, y1, x2, y2]
+            logger.debug(f"Frame {frame_id} post-predict tracks: {post_predict_tracks[:5]}")
             visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
                              os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
 
@@ -219,8 +265,22 @@ def main(opt):
                 if track.is_confirmed() and track.time_since_update <= 1:
                     bbox = track.to_tlwh()
                     score = track.confidence if hasattr(track, 'confidence') else 1.0
-                    results[frame_id].append([track.track_id] + bbox.tolist() + [score])
-            logger.debug(f"Frame {frame_id} tracks [track_id, x, y, w, h, score]: {results[frame_id][:5]}")
+                    found = False
+                    for f_id in range(frame_id, 0, -1):
+                        key = (track.track_id, f_id)
+                        if key in track_original_coords:
+                            orig_bbox = track_original_coords[key]
+                            orig_x1, orig_y1, orig_x2, orig_y2 = orig_bbox
+                            results[frame_id].append([track.track_id, orig_x1, orig_y1, orig_x2, orig_y2, score])
+                            found = True
+                            break
+                    if not found:
+                        x1, y1, w, h = bbox
+                        x2 = x1 + w
+                        y2 = y1 + h
+                        results[frame_id].append([track.track_id, x1, y1, x2, y2, score])
+                        track_original_coords[(track.track_id, frame_id)] = [x1, y1, x2, y2]
+            logger.debug(f"Frame {frame_id} tracks: {results[frame_id][:5]}")
 
         # Visualize initial tracks
         visualize_tracks(None, results[frame_id], frame_id, "initial", 
@@ -235,22 +295,25 @@ def main(opt):
     with open(initial_output_path, 'w') as f:
         for frame_id in sorted(results.keys(), key=int):
             for track in results[frame_id]:
-                f.write(f"{frame_id},{track[0]},{track[1]:.2f},{track[2]:.2f},{track[3]:.2f},{track[4]:.2f},{track[5]:.2f}\n")
+                track_id, x1, y1, x2, y2, score = track
+                x = (x1 + x2) / 2
+                y = (y1 + y2) / 2
+                w = x2 - x1
+                h = y2 - y1
+                f.write(f"{frame_id},{track_id},{x:.2f},{y:.2f},{w:.2f},{h:.2f},{score:.2f}\n")
 
-    # Check if any tracks were generated
     total_tracks = sum(len(tracks) for tracks in results.values())
     if total_tracks == 0:
         logger.warning("No tracks were generated. Skipping post-processing steps (aflink, interpolation).")
-        # Save an empty final tracks file to indicate completion
         final_output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}.txt")
         with open(final_output_path, 'w') as f:
-            pass  # Create an empty file
+            pass
         logger.info(f"No tracks to save. Created empty file at {final_output_path}")
         return
 
     logger.info("Starting post-processing")
     gsi_input_path = initial_output_path
-    aflink_results = results.copy()
+    aflink_results = {}
     if "aflink" in opt.post_process:
         logger.debug("Running AFLink post-processing")
         state_dict = torch.load("/kaggle/working/AdapTrack/AdapTrack/AFLink/AFLink_epoch20.pth", weights_only=True)
@@ -271,16 +334,17 @@ def main(opt):
         aflink.link()
         logger.debug("AFLink post-processing completed")
         gsi_input_path = os.path.join(opt.output_dir, f"{opt.sequence_name}_aflink.txt")
-        # Load AFLink results
         aflink_data = np.loadtxt(gsi_input_path, delimiter=',')
-        aflink_results = {}
         for row in aflink_data:
             frame_id, track_id, x, y, w, h = row[:6]
             frame_id = int(frame_id)
+            x1 = x - w/2
+            y1 = y - h/2
+            x2 = x + w/2
+            y2 = y + h/2
             if frame_id not in aflink_results:
                 aflink_results[frame_id] = []
-            aflink_results[frame_id].append([int(track_id), x, y, w, h, 1.0])
-        # Visualize AFLink tracks
+            aflink_results[frame_id].append([int(track_id), x1, y1, x2, y2, 1.0])
         for frame_id in aflink_results:
             visualize_tracks(None, aflink_results[frame_id], frame_id, "aflink",
                              os.path.join(opt.output_dir, "aflink_vis"), opt.vis_interval, opt.image_dir)
@@ -294,16 +358,18 @@ def main(opt):
         for row in gsi_results:
             frame_id, track_id, x, y, w, h = row[:6]
             frame_id = int(frame_id)
+            x1 = x - w/2
+            y1 = y - h/2
+            x2 = x + w/2
+            y2 = y + h/2
             if frame_id not in results:
                 results[frame_id] = []
-            results[frame_id].append([int(track_id), x, y, w, h, 1.0])
+            results[frame_id].append([int(track_id), x1, y1, x2, y2, 1.0])
         logger.debug("GSI interpolation completed")
-        # Visualize GSI tracks
         for frame_id in results:
             visualize_tracks(None, results[frame_id], frame_id, "gsi",
                              os.path.join(opt.output_dir, "gsi_vis"), opt.vis_interval, opt.image_dir)
 
-    # Visualize final tracks
     for frame_id in results:
         visualize_tracks(None, results[frame_id], frame_id, "final",
                          os.path.join(opt.output_dir, "final_vis"), opt.vis_interval, opt.image_dir)
@@ -313,7 +379,12 @@ def main(opt):
     with open(final_output_path, 'w') as f:
         for frame_id in sorted(results.keys(), key=int):
             for track in results[frame_id]:
-                f.write(f"{frame_id},{track[0]},{track[1]:.2f},{track[2]:.2f},{track[3]:.2f},{track[4]:.2f},{track[5]:.2f},-1,-1,-1\n")
+                track_id, x1, y1, x2, y2, score = track
+                x = (x1 + x2) / 2
+                y = (y1 + y2) / 2
+                w = x2 - x1
+                h = y2 - y1
+                f.write(f"{frame_id},{track_id},{x:.2f},{y:.2f},{w:.2f},{h:.2f},{score:.2f},-1,-1,-1\n")
     logger.info(f"Tracks saved to {final_output_path}")
 
 if __name__ == "__main__":
