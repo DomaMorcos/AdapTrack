@@ -5,9 +5,9 @@ from torch import nn
 class TemporalBlock(nn.Module):
     def __init__(self, cin, cout):
         super(TemporalBlock, self).__init__()
-        self.conv = nn.Conv2d(1, 16, kernel_size=(3, 1), stride=1)  # Changed to (3, 1)
+        self.conv = nn.Conv2d(cin, cout, kernel_size=(3, 1), stride=1)  # cin to cout
         self.relu = nn.ReLU(inplace=True)
-        self.bnf = nn.BatchNorm1d(cout)
+        self.bnf = nn.BatchNorm1d(cout)  # Match cout
         self.bnx = nn.BatchNorm1d(cout)
         self.bny = nn.BatchNorm1d(cout)
 
@@ -27,7 +27,7 @@ class TemporalBlock(nn.Module):
 class FusionBlock(nn.Module):
     def __init__(self, cin, cout):
         super(FusionBlock, self).__init__()
-        self.conv = nn.Conv2d(cin, cout, (1, 3), bias=False)
+        self.conv = nn.Conv2d(cin, cout, kernel_size=(1, 3), bias=False)
         self.bn = nn.BatchNorm2d(cout)
         self.relu = nn.ReLU(inplace=True)
 
@@ -41,9 +41,9 @@ class FusionBlock(nn.Module):
 class Classifier(nn.Module):
     def __init__(self, cin):
         super(Classifier, self).__init__()
-        self.fc1 = nn.Linear(cin*2, cin//2)
+        self.fc1 = nn.Linear(cin * 2, cin // 2)
         self.relu = nn.ReLU(inplace=True)
-        self.fc2 = nn.Linear(cin//2, 2)
+        self.fc2 = nn.Linear(cin // 2, 2)
 
     def forward(self, x1, x2):
         x = torch.cat((x1, x2), dim=1)
@@ -57,21 +57,21 @@ class PostLinker(nn.Module):
     def __init__(self):
         super(PostLinker, self).__init__()
         self.TemporalModule_1 = nn.Sequential(
-            TemporalBlock(1, 32),
-            TemporalBlock(32, 64),
-            TemporalBlock(64, 128),
-            TemporalBlock(128, 256)
+            TemporalBlock(1, 16),    # 1 → 16
+            TemporalBlock(16, 32),   # 16 → 32
+            TemporalBlock(32, 64),   # 32 → 64
+            TemporalBlock(64, 128)   # 64 → 128
         )
         self.TemporalModule_2 = nn.Sequential(
-            TemporalBlock(1, 32),
-            TemporalBlock(32, 64),
-            TemporalBlock(64, 128),
-            TemporalBlock(128, 256)
+            TemporalBlock(1, 16),    # 1 → 16
+            TemporalBlock(16, 32),   # 16 → 32
+            TemporalBlock(32, 64),   # 32 → 64
+            TemporalBlock(64, 128)   # 64 → 128
         )
-        self.FusionBlock_1 = FusionBlock(256, 256)
-        self.FusionBlock_2 = FusionBlock(256, 256)
+        self.FusionBlock_1 = FusionBlock(128, 256)  # 128 → 256
+        self.FusionBlock_2 = FusionBlock(128, 256)  # 128 → 256
         self.pooling = nn.AdaptiveAvgPool2d((1, 1))
-        self.classifier = Classifier(256)
+        self.classifier = Classifier(256)  # Input: 256 channels
 
     def forward(self, x1, x2):
         x1 = x1[:, :, :, :3]
