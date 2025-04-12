@@ -205,6 +205,12 @@ def main(opt):
                 logger.info(f"Frame {frame_id}: New tracks {[(tid, coords) for tid, coords in new_tracks]}")
                 logger.info(f"Frame {frame_id}: Matched track IDs {[tracker.tracks[track_idx].track_id for det_idx, track_idx in matches]}")
 
+            # Debug: Log state of track 47
+            if frame_id <= 5:
+                for track in tracker.tracks:
+                    if track.track_id == 47:
+                        logger.info(f"Frame {frame_id}: Track 47 - time_since_update={track.time_since_update}, is_deleted={track.is_deleted()}")
+
             # Initialize track_coords for new tracks before processing matches
             for track_id, coords in new_tracks:
                 track_coords[track_id] = coords
@@ -237,6 +243,9 @@ def main(opt):
 
             # Prune coordinates for deleted tracks
             active_track_ids = {track.track_id for track in tracker.tracks if not track.is_deleted()}
+            if frame_id <= 5:
+                removed_ids = set(track_coords.keys()) - active_track_ids
+                logger.info(f"Frame {frame_id}: Pruning track_coords, removed IDs {removed_ids}")
             track_coords = {tid: coords for tid, coords in track_coords.items() if tid in active_track_ids}
 
         visualize_tracks(None, results[frame_id], frame_id, "initial", 
