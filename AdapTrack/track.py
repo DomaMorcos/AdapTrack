@@ -216,7 +216,7 @@ def main(opt):
                         x2 = x1 + w
                         y2 = y1 + h
                         pre_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
-            logger.debug(f"Frame {frame_id} pre-predict tracks: {pre_predict_tracks[:5]}")
+            # logger.debug(f"Frame {frame_id} pre-predict tracks: {pre_predict_tracks[:5]}")
             visualize_tracks(None, pre_predict_tracks, frame_id, "pre_predict", 
                              os.path.join(opt.output_dir, "pre_predict_vis"), opt.vis_interval, opt.image_dir)
 
@@ -253,7 +253,7 @@ def main(opt):
                         y2 = y1 + h
                         post_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
                         track_original_coords[(track.track_id, frame_id)] = [x1, y1, x2, y2]
-            logger.debug(f"Frame {frame_id} post-predict tracks: {post_predict_tracks[:5]}")
+            # logger.debug(f"Frame {frame_id} post-predict tracks: {post_predict_tracks[:5]}")
             visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
                              os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
 
@@ -280,7 +280,7 @@ def main(opt):
                         y2 = y1 + h
                         results[frame_id].append([track.track_id, x1, y1, x2, y2, score])
                         track_original_coords[(track.track_id, frame_id)] = [x1, y1, x2, y2]
-            logger.debug(f"Frame {frame_id} tracks: {results[frame_id][:5]}")
+            # logger.debug(f"Frame {frame_id} tracks: {results[frame_id][:5]}")
 
         # Visualize initial tracks
         visualize_tracks(None, results[frame_id], frame_id, "initial", 
