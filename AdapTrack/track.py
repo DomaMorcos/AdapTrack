@@ -200,13 +200,25 @@ def main(opt):
 
             matches, new_tracks = tracker.update(detections)
 
-            # Initialize track_coords for new tracks
+            # Debug: Log new tracks and matched track IDs
+            if frame_id <= 5:
+                logger.info(f"Frame {frame_id}: New tracks {[(tid, coords) for tid, coords in new_tracks]}")
+                logger.info(f"Frame {frame_id}: Matched track IDs {[tracker.tracks[track_idx].track_id for det_idx, track_idx in matches]}")
+
+            # Initialize track_coords for new tracks before processing matches
             for track_id, coords in new_tracks:
                 track_coords[track_id] = coords
 
             # Update track coordinates based on matches
             for det_idx, track_idx in matches:
                 track_id = tracker.tracks[track_idx].track_id
+                if track_id not in track_coords:
+                    # Fallback: Initialize with predicted coordinates if missing
+                    bbox = tracker.tracks[track_idx].to_tlwh()
+                    x1, y1, w, h = bbox
+                    x2, y2 = x1 + w, y1 + h
+                    track_coords[track_id] = [x1, y1, x2, y2]
+                    logger.warning(f"Frame {frame_id}: Track ID {track_id} not in track_coords, initialized with predicted coords")
                 track_coords[track_id] = det_coords[det_idx]
 
             results[frame_id] = []
