@@ -44,6 +44,29 @@ def get_color(track_id):
     r, g, b = colorsys.hsv_to_rgb(h, 1.0, 1.0)
     return (int(r * 255), int(g * 255), int(b * 255))
 
+def visualize_xyxy_detections(img, dets, frame_id, output_dir, vis_interval, stage, img_dir, frame_padding='.jpg'):
+    if frame_id % vis_interval != 0:
+        return
+    if dets is None or len(dets) == 0:
+        return
+    if img is None:
+        img_path = os.path.join(img_dir, f"{frame_id:06d}{frame_padding}")
+        img = cv2.imread(img_path)
+        if img is None:
+            logger.warning(f"Failed to load {img_path} for visualization")
+            return
+    img_vis = img.copy()
+    for i, det in enumerate(dets):
+        x1, y1, x2, y2 = det[:4]
+        score = det[4] if len(det) > 4 else 1.0
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        logger.debug(f"Frame {frame_id} {stage} det {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
+        cv2.rectangle(img_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(img_vis, f"s:{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    os.makedirs(output_dir, exist_ok=True)
+    cv2.imwrite(os.path.join(output_dir, f"{stage}_frame_{frame_id:06d}.jpg"), img_vis)
+    logger.info(f"Saved {stage} visualization for frame {frame_id}")
+
 def visualize_tracks(img, tracks, frame_id, stage, output_dir, vis_interval, img_dir, frame_padding='.jpg'):
     if frame_id % vis_interval != 0:
         return
@@ -62,6 +85,7 @@ def visualize_tracks(img, tracks, frame_id, stage, output_dir, vis_interval, img
         y1 = int(y - h/2)
         x2 = int(x + w/2)
         y2 = int(y + h/2)
+        logger.debug(f"Frame {frame_id} {stage} track {track_id}: x={x}, y={y}, w={w}, h={h}, converted to x1={x1}, y1={y1}, x2={x2}, y2={y2}")
         color = get_color(int(track_id))
         cv2.rectangle(img_vis, (x1, y1), (x2, y2), color, 2)
         cv2.putText(img_vis, f"ID:{int(track_id)} s:{score:.2f}", (x1, y1-10), 
@@ -145,6 +169,11 @@ def main(opt):
             scores = dets[:, 4]
             features = dets[:, 5:]
             logger.debug(f"Frame {frame_id}: {len(boxes)} detections before filtering")
+            logger.debug(f"Frame {frame_id} input boxes [x1, y1, x2, y2]: {boxes[:5]}")
+
+            # Visualize raw detections before tracking
+            visualize_xyxy_detections(None, dets, frame_id, os.path.join(opt.output_dir, "raw_dets_vis"), 
+                                     opt.vis_interval, "raw_dets", opt.image_dir)
 
             mask = (scores >= opt.conf_thresh) & \
                    ((boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1]) >= opt.min_area) & \
@@ -157,8 +186,31 @@ def main(opt):
             detections = [Detection(bbox, score, feature) for bbox, score, feature in zip(boxes, scores, features)]
             logger.debug(f"Frame {frame_id}: Created {len(detections)} Detection objects")
 
+            # Visualize tracks before prediction (initial state of tracks)
+            pre_predict_tracks = []
+            for track in tracker.tracks:
+                if track.is_confirmed() and track.time_since_update <= 1:
+                    bbox = track.to_tlwh()
+                    score = track.confidence if hasattr(track, 'confidence') else 1.0
+                    pre_predict_tracks.append([track.track_id] + bbox.tolist() + [score])
+            logger.debug(f"Frame {frame_id} pre-predict tracks [track_id, x, y, w, h, score]: {pre_predict_tracks[:5]}")
+            visualize_tracks(None, pre_predict_tracks, frame_id, "pre_predict", 
+                             os.path.join(opt.output_dir, "pre_predict_vis"), opt.vis_interval, opt.image_dir)
+
             logger.debug(f"Frame {frame_id}: Predicting")
             tracker.predict()
+
+            # Visualize tracks after prediction but before update
+            post_predict_tracks = []
+            for track in tracker.tracks:
+                if track.is_confirmed() and track.time_since_update <= 1:
+                    bbox = track.to_tlwh()
+                    score = track.confidence if hasattr(track, 'confidence') else 1.0
+                    post_predict_tracks.append([track.track_id] + bbox.tolist() + [score])
+            logger.debug(f"Frame {frame_id} post-predict tracks [track_id, x, y, w, h, score]: {post_predict_tracks[:5]}")
+            visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
+                             os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
+
             logger.debug(f"Frame {frame_id}: Updating with {len(detections)} detections")
             tracker.update(detections)
 
@@ -168,6 +220,7 @@ def main(opt):
                     bbox = track.to_tlwh()
                     score = track.confidence if hasattr(track, 'confidence') else 1.0
                     results[frame_id].append([track.track_id] + bbox.tolist() + [score])
+            logger.debug(f"Frame {frame_id} tracks [track_id, x, y, w, h, score]: {results[frame_id][:5]}")
 
         # Visualize initial tracks
         visualize_tracks(None, results[frame_id], frame_id, "initial", 
@@ -183,6 +236,17 @@ def main(opt):
         for frame_id in sorted(results.keys(), key=int):
             for track in results[frame_id]:
                 f.write(f"{frame_id},{track[0]},{track[1]:.2f},{track[2]:.2f},{track[3]:.2f},{track[4]:.2f},{track[5]:.2f}\n")
+
+    # Check if any tracks were generated
+    total_tracks = sum(len(tracks) for tracks in results.values())
+    if total_tracks == 0:
+        logger.warning("No tracks were generated. Skipping post-processing steps (aflink, interpolation).")
+        # Save an empty final tracks file to indicate completion
+        final_output_path = os.path.join(opt.output_dir, f"{opt.sequence_name}.txt")
+        with open(final_output_path, 'w') as f:
+            pass  # Create an empty file
+        logger.info(f"No tracks to save. Created empty file at {final_output_path}")
+        return
 
     logger.info("Starting post-processing")
     gsi_input_path = initial_output_path
