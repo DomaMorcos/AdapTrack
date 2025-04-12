@@ -25,7 +25,8 @@ def make_parser():
     parser.add_argument("--exp_name", type=str, default="dets.pickle", help="Output pickle filename")
     parser.add_argument("--confthre", type=float, default=0.1, help="Confidence threshold")
     parser.add_argument("--nmsthre", type=float, default=0.5, help="NMS IoU threshold")
-    parser.add_argument("--img_size", type=str, default="608,1088", help="Input image size (height,width)")
+    parser.add_argument("--model1_img_size", type=str, default="1280,1280", help="Input image size for Model 1 (height,width)")
+    parser.add_argument("--model2_img_size", type=str, default="960,960", help="Input image size for Model 2 (height,width)")
     parser.add_argument("--fp16", action="store_true", help="Use half-precision inference")
     parser.add_argument("--vis_interval", type=int, default=10, help="Save visualization every N frames")
     return parser
@@ -97,9 +98,13 @@ def visualize_cxcywh_detections(img, dets, frame_id, output_dir, vis_interval, s
     cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}_{stage_name}.jpg"), vis_img)
     logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
 
-def run_detector(detector, img_tensor_np, output_list, index):
+def run_detector(detector, img_tensor_np, output_list, index, img_size):
     with torch.no_grad():
-        output_list[index] = detector(img_tensor_np)
+        # Resize image tensor to the detector's expected input size
+        img_tensor_resized = torch.nn.functional.interpolate(
+            img_tensor_np, size=img_size, mode='bilinear', align_corners=False
+        )
+        output_list[index] = detector(img_tensor_resized)
 
 def main(args):
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
@@ -108,7 +113,8 @@ def main(args):
     else:
         logger.warning("CUDA not available, running on CPU")
 
-    img_size = tuple(map(int, args.img_size.split(',')))
+    model1_img_size = tuple(map(int, args.model1_img_size.split(',')))  # 1280x1280 for YOLO12l
+    model2_img_size = tuple(map(int, args.model2_img_size.split(',')))  # 960x960 for YOLO12x
 
     if args.seqinfo_path is None:
         args.seqinfo_path = os.path.join(os.path.dirname(args.dataset_path), "seqinfo.ini")
@@ -118,9 +124,9 @@ def main(args):
     seq_info = load_seqinfo(args.seqinfo_path)
     video_name = seq_info["name"]
     seq_length = seq_info["seqLength"]
-    orig_size = (seq_info["imHeight"], seq_info["imWidth"])
+    orig_size = (seq_info["imHeight"], seq_info["imWidth"])  # e.g., 1080x1920
     im_ext = seq_info["imExt"]
-    logger.info(f"Original image size: {orig_size}, Resized image size: {img_size}")
+    logger.info(f"Original image size: {orig_size}, Model 1 image size: {model1_img_size}, Model 2 image size: {model2_img_size}")
 
     preproc = ValTransform(rgb_means=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 
@@ -162,29 +168,40 @@ def main(args):
             det_results[video_name][frame_id] = None
             continue
 
-        img_tensor, _ = preproc(img, None, img_size)
-        img_tensor = torch.from_numpy(img_tensor).unsqueeze(0).cuda()
+        # Preprocess for Model 1 (1280x1280)
+        img_tensor1, scale1 = preproc(img, None, model1_img_size)
+        img_tensor1 = torch.from_numpy(img_tensor1).unsqueeze(0).cuda()
         if args.fp16:
-            img_tensor = img_tensor.half()
+            img_tensor1 = img_tensor1.half()
+        img_np1 = cv2.resize(img, (model1_img_size[1], model1_img_size[0]))
+        img_tensor_np1 = torch.from_numpy(img_np1.transpose(2, 0, 1)).unsqueeze(0).cuda() / 255.0
+        if args.fp16:
+            img_tensor_np1 = img_tensor_np1.half()
 
-        img_np = cv2.resize(img, (img_size[1], img_size[0]))
-        img_tensor_np = torch.from_numpy(img_np.transpose(2, 0, 1)).unsqueeze(0).cuda() / 255.0
+        # Preprocess for Model 2 (960x960)
+        img_tensor2, scale2 = preproc(img, None, model2_img_size)
+        img_tensor2 = torch.from_numpy(img_tensor2).unsqueeze(0).cuda()
         if args.fp16:
-            img_tensor_np = img_tensor_np.half()
+            img_tensor2 = img_tensor2.half()
+        img_np2 = cv2.resize(img, (model2_img_size[1], model2_img_size[0]))
+        img_tensor_np2 = torch.from_numpy(img_np2.transpose(2, 0, 1)).unsqueeze(0).cuda() / 255.0
+        if args.fp16:
+            img_tensor_np2 = img_tensor_np2.half()
 
         # Debug input tensor range
-        print(f"Frame {frame_id} - img_tensor_np min: {img_tensor_np.min().item()}, max: {img_tensor_np.max().item()}")
+        print(f"Frame {frame_id} - Model 1 img_tensor_np min: {img_tensor_np1.min().item()}, max: {img_tensor_np1.max().item()}")
+        print(f"Frame {frame_id} - Model 2 img_tensor_np min: {img_tensor_np2.min().item()}, max: {img_tensor_np2.max().item()}")
 
         with torch.no_grad():
             if frame_id == 1:  # Warm-up
-                _ = detector1(img_tensor_np)
-                _ = detector2(img_tensor_np)
+                _ = detector1(img_tensor_np1)
+                _ = detector2(img_tensor_np2)
                 torch.cuda.synchronize()
 
             # Run detectors in parallel
             outputs_list = [None, None]
-            thread1 = threading.Thread(target=run_detector, args=(detector1, img_tensor_np, outputs_list, 0))
-            thread2 = threading.Thread(target=run_detector, args=(detector2, img_tensor_np, outputs_list, 1))
+            thread1 = threading.Thread(target=run_detector, args=(detector1, img_tensor_np1, outputs_list, 0, model1_img_size))
+            thread2 = threading.Thread(target=run_detector, args=(detector2, img_tensor_np2, outputs_list, 1, model2_img_size))
             thread1.start()
             thread2.start()
             thread1.join()
@@ -194,6 +211,20 @@ def main(args):
             # Move outputs to CUDA
             outputs1 = outputs1.cuda()
             outputs2 = outputs2.cuda()
+
+            # Scale Model 1 outputs (1280x1280) to original resolution (1920x1080)
+            if outputs1.shape[0] > 0:
+                scale_x1 = orig_size[1] / model1_img_size[1]  # 1920 / 1280
+                scale_y1 = orig_size[0] / model1_img_size[0]  # 1080 / 1280
+                outputs1[:, [0, 2]] *= scale_x1  # x1, x2
+                outputs1[:, [1, 3]] *= scale_y1  # y1, y2
+
+            # Scale Model 2 outputs (960x960) to original resolution (1920x1080)
+            if outputs2.shape[0] > 0:
+                scale_x2 = orig_size[1] / model2_img_size[1]  # 1920 / 960
+                scale_y2 = orig_size[0] / model2_img_size[0]  # 1080 / 960
+                outputs2[:, [0, 2]] *= scale_x2  # x1, x2
+                outputs2[:, [1, 3]] *= scale_y2  # y1, y2
 
             # Debug raw outputs
             if outputs1.shape[0] > 0:
@@ -205,12 +236,13 @@ def main(args):
             logger.debug(f"Model 1 output shape: {outputs1.shape}")
             logger.debug(f"Model 2 output shape: {outputs2.shape}")
 
-            # Visualize raw outputs from Model 1 and Model 2 (in resized image space: 608x1088)
-            visualize_xyxy_detections(img, outputs1, frame_id, vis_dir, args.vis_interval, "model1_raw", img_size=img_size)
-            visualize_xyxy_detections(img, outputs2, frame_id, vis_dir, args.vis_interval, "model2_raw", img_size=img_size)
+            # Visualize raw outputs from Model 1 and Model 2 (in original image space: 1920x1080)
+            visualize_xyxy_detections(img, outputs1, frame_id, vis_dir, args.vis_interval, "model1_raw", img_size=None)
+            visualize_xyxy_detections(img, outputs2, frame_id, vis_dir, args.vis_interval, "model2_raw", img_size=None)
 
-            # Run EnsembleDetector
-            ensemble_outputs = ensemble_detector(img_np)
+            # Run EnsembleDetector on original resolution image
+            img_np_orig = img.copy()  # Original resolution: 1920x1080
+            ensemble_outputs = ensemble_detector(img_np_orig)
             ensemble_outputs = ensemble_outputs.cuda()
             logger.debug(f"Ensemble output shape: {ensemble_outputs.shape}")
             if ensemble_outputs.shape[0] > 0:
@@ -238,9 +270,9 @@ def main(args):
             else:
                 outputs2_yolox = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
 
-            # Visualize after conversion to YOLOX format (in resized image space: 608x1088)
-            visualize_cxcywh_detections(img, outputs1_yolox, frame_id, vis_dir, args.vis_interval, "model1_yolox", img_size=img_size)
-            visualize_cxcywh_detections(img, outputs2_yolox, frame_id, vis_dir, args.vis_interval, "model2_yolox", img_size=img_size)
+            # Visualize after conversion to YOLOX format (in original image space: 1920x1080)
+            visualize_cxcywh_detections(img, outputs1_yolox, frame_id, vis_dir, args.vis_interval, "model1_yolox", img_size=None)
+            visualize_cxcywh_detections(img, outputs2_yolox, frame_id, vis_dir, args.vis_interval, "model2_yolox", img_size=None)
 
             # Combine outputs and apply weights
             combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)
@@ -257,8 +289,8 @@ def main(args):
                 outputs = torch.zeros((1, 0, 6), device='cuda')
                 logger.info(f"Frame {frame_id}: 0 detections before NMS")
 
-            # Visualize after weighting (in resized image space: 608x1088)
-            visualize_cxcywh_detections(img, outputs[0], frame_id, vis_dir, args.vis_interval, "after_weighting", img_size=img_size)
+            # Visualize after weighting (in original image space: 1920x1080)
+            visualize_cxcywh_detections(img, outputs[0], frame_id, vis_dir, args.vis_interval, "after_weighting", img_size=None)
 
             # Postprocess (expects [cx, cy, w, h, obj_score, class_score])
             outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
@@ -269,17 +301,14 @@ def main(args):
                 outputs = None
                 logger.info(f"Frame {frame_id}: 0 detections after NMS")
 
-            # Visualize after postprocessing (in resized image space: 608x1088)
+            # Visualize after postprocessing (in original image space: 1920x1080)
             if outputs is not None:
-                visualize_xyxy_detections(img, outputs[:, :6], frame_id, vis_dir, args.vis_interval, "after_postprocess", img_size=img_size)
+                visualize_xyxy_detections(img, outputs[:, :6], frame_id, vis_dir, args.vis_interval, "after_postprocess", img_size=None)
 
         if outputs is not None:
             det = outputs[:, :6].cpu().numpy()  # [x1, y1, x2, y2, obj_score, class_score]
             det[:, 4] *= det[:, 5]  # Combine objectness and class score
             det = det[:, :5]  # Keep only [x1, y1, x2, y2, score]
-            scale = min(img_size[0] / orig_size[0], img_size[1] / orig_size[1])
-            logger.info(f"Final scaling factor: {scale}")
-            det[:, :4] /= scale  # Scale back to original resolution
             det_results[video_name][frame_id] = det
         else:
             det_results[video_name][frame_id] = None
