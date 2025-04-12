@@ -97,10 +97,22 @@ def main(opt):
     with open(opt.det_feat_path, 'rb') as f:
         det_feat = pickle.load(f)
 
-    logger.info(f"Loaded detections with {len(det_feat)} frames")
-    sample_frame = next((fid for fid, dets in det_feat.items() if dets is not None), None)
+    # Extract the video name (should match opt.sequence_name) and get the frame data
+    if not det_feat or not isinstance(det_feat, dict):
+        raise ValueError("Detection pickle file is empty or not a dictionary")
+    
+    # Assuming det_feat is {vid_name: {frame_id: dets}}
+    vid_name = opt.sequence_name
+    if vid_name not in det_feat:
+        raise KeyError(f"Video name '{vid_name}' not found in detection pickle. Available keys: {list(det_feat.keys())}")
+    
+    frame_data = det_feat[vid_name]
+    logger.info(f"Loaded detections for video '{vid_name}' with {len(frame_data)} frames")
+
+    # Find a sample frame with detections
+    sample_frame = next((fid for fid, dets in frame_data.items() if dets is not None and len(dets) > 0), None)
     if sample_frame:
-        logger.info(f"Sample frame {sample_frame}: {det_feat[sample_frame].shape} detections")
+        logger.info(f"Sample frame {sample_frame}: {frame_data[sample_frame].shape} detections")
 
     metric = NearestNeighborDistanceMetric()
     tracker = Tracker(
@@ -115,9 +127,9 @@ def main(opt):
     )
 
     results = {}
-    frame_ids = sorted(det_feat.keys(), key=int)
+    frame_ids = sorted(frame_data.keys(), key=int)
     for frame_id in frame_ids:
-        dets = det_feat[frame_id]
+        dets = frame_data[frame_id]
         logger.debug(f"Processing frame {frame_id}: {dets.shape if dets is not None else 'None'} detections")
         if dets is None or dets.shape[0] == 0:
             logger.debug(f"Frame {frame_id}: Predicting with no detections")
