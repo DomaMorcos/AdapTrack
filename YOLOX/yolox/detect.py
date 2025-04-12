@@ -68,7 +68,7 @@ def visualize_xyxy_detections(img, dets, frame_id, output_dir, vis_interval, sta
         score = det[4].cpu().numpy() if len(det) > 4 else 0.0
         cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(vis_img, f"{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        logger.debug(f"{stage_name} detection {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
+        # logger.debug(f"{stage_name} detection {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
     os.makedirs(output_dir, exist_ok=True)
     cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}_{stage_name}.jpg"), vis_img)
     logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
@@ -296,7 +296,7 @@ def main(args):
             outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
             if outputs[0] is not None:
                 outputs = outputs[0]  # Shape: (N, 7) [x1, y1, x2, y2, obj_score, class_score, class_pred]
-                # logger.info(f"Frame {frame_id}: {outputs.shape[0]} detections after NMS")
+                logger.info(f"Frame {frame_id}: {outputs.shape[0]} detections after NMS")
             else:
                 outputs = None
                 # logger.info(f"Frame {frame_id}: 0 detections after NMS")
