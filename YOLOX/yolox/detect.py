@@ -71,7 +71,7 @@ def visualize_xyxy_detections(img, dets, frame_id, output_dir, vis_interval, sta
         # logger.debug(f"{stage_name} detection {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
     os.makedirs(output_dir, exist_ok=True)
     cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}_{stage_name}.jpg"), vis_img)
-    logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
+    # logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
 
 def visualize_cxcywh_detections(img, dets, frame_id, output_dir, vis_interval, stage_name, img_size=None):
     if frame_id % vis_interval != 0:
@@ -93,10 +93,10 @@ def visualize_cxcywh_detections(img, dets, frame_id, output_dir, vis_interval, s
         y2 = int(cy + h/2)
         cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(vis_img, f"{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        logger.debug(f"{stage_name} detection {i}: cx={cx}, cy={cy}, w={w}, h={h}, score={score:.2f}")
+        # logger.debug(f"{stage_name} detection {i}: cx={cx}, cy={cy}, w={w}, h={h}, score={score:.2f}")
     os.makedirs(output_dir, exist_ok=True)
     cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}_{stage_name}.jpg"), vis_img)
-    logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
+    # logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
 
 def run_detector(detector, img_tensor_np, output_list, index, img_size):
     with torch.no_grad():
