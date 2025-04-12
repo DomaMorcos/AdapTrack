@@ -92,7 +92,7 @@ def make_parser():
 
 def main(opt):
     opt.max_age = opt.frame_rate if opt.max_age is None else opt.max_age
-    logger.info(f"Using conf_thresh={opt.conf_thresh}, min_area={opt.min_area}")
+    logger.info(f"Using conf_thresh={opt.conf_thresh}, min_area={opt.min_area}, max_distance={opt.max_distance}")
 
     with open(opt.det_feat_path, 'rb') as f:
         det_feat = pickle.load(f)
@@ -111,7 +111,7 @@ def main(opt):
     tracker = Tracker(
         metric=metric,
         vid_name=opt.sequence_name,
-        max_distance=opt.max_distance,
+        max_distance=0.6,  # Increased to allow more matches
         max_iou_distance=opt.max_iou_distance,
         min_len=opt.min_len,
         max_age=opt.max_age,
@@ -139,6 +139,17 @@ def main(opt):
             features = dets[:, 5:]
             logger.info(f"Frame {frame_id}: {len(boxes)} pedestrians before filtering")
 
+            # Log feature statistics before normalization
+            if frame_id <= 3:
+                logger.info(f"Frame {frame_id}: Feature shape {features.shape}, mean {np.mean(features):.2f}, std {np.std(features):.2f}, min {np.min(features):.2f}, max {np.max(features):.2f}")
+
+            # Normalize features to improve matching
+            features = features / (np.linalg.norm(features, axis=1, keepdims=True) + 1e-6)  # L2 normalization
+
+            # Log feature statistics after normalization
+            if frame_id <= 3:
+                logger.info(f"Frame {frame_id}: Normalized features - mean {np.mean(features):.2f}, std {np.std(features):.2f}, min {np.min(features):.2f}, max {np.max(features):.2f}")
+
             visualize_xyxy_detections(None, dets, frame_id, os.path.join(opt.output_dir, "raw_dets_vis"), 
                                      opt.vis_interval, "raw_dets", opt.image_dir)
 
@@ -165,7 +176,7 @@ def main(opt):
                         pre_predict_tracks.append([track.track_id] + coords + [score])
                     else:
                         x1, y1, w, h = bbox
-                        x2, y2 = x1 + w, y1 + h  # Fixed: Corrected y2 calculation
+                        x2, y2 = x1 + w, y1 + h
                         pre_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
             visualize_tracks(None, pre_predict_tracks, frame_id, "pre_predict", 
                              os.path.join(opt.output_dir, "pre_predict_vis"), opt.vis_interval, opt.image_dir)
@@ -182,20 +193,17 @@ def main(opt):
                         post_predict_tracks.append([track.track_id] + coords + [score])
                     else:
                         x1, y1, w, h = bbox
-                        x2, y2 = x1 + w, y1 + h  # Fixed: Corrected y2 calculation
+                        x2, y2 = x1 + w, y1 + h
                         post_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
             visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
                              os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
 
             matches = tracker.update(detections)
 
-            # Handle case where matches is None
-            if matches is not None:
-                for det_idx, track_idx in matches:
-                    track_id = tracker.tracks[track_idx].track_id
-                    track_coords[track_id] = det_coords[det_idx]
-            else:
-                logger.warning(f"Frame {frame_id}: No matches returned from tracker.update()")
+            # Update track coordinates based on matches
+            for det_idx, track_idx in matches:
+                track_id = tracker.tracks[track_idx].track_id
+                track_coords[track_id] = det_coords[det_idx]
 
             results[frame_id] = []
             for track in tracker.tracks:
@@ -207,7 +215,7 @@ def main(opt):
                     else:
                         bbox = track.to_tlwh()
                         x1, y1, w, h = bbox
-                        x2, y2 = x1 + w, y1 + h  # Fixed: Corrected y2 calculation
+                        x2, y2 = x1 + w, y1 + h
                         results[frame_id].append([track.track_id, x1, y1, x2, y2, score])
                         track_coords[track.track_id] = [x1, y1, x2, y2]
 

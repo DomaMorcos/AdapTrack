@@ -20,7 +20,6 @@ class Tracker:
 
     def initiate_track(self, detection):
         cxcyah = detection.to_cxcyah()
-        # print(f"Initiating track {self.next_id} with cxcyah: {cxcyah}")
         self.tracks.append(Track(cxcyah, self.next_id, detection.confidence, detection.feature,
                                  conf_thresh=self.conf_thresh, min_len=self.min_len, ema_beta=self.ema_beta, max_age=self.max_age))
         self.next_id += 1
@@ -38,8 +37,11 @@ class Tracker:
         targets = np.array([tracks[i].track_id for i in track_indices])
         features = np.array([detections[i].feature for i in detection_indices])
         cost_matrix = self.metric.distance(features, targets)
-        cost_matrix_min = np.min(cost_matrix)
-        cost_matrix_max = np.max(cost_matrix)
+        cost_matrix_min = np.min(cost_matrix) if cost_matrix.size > 0 else float('inf')
+        cost_matrix_max = np.max(cost_matrix) if cost_matrix.size > 0 else float('-inf')
+        # Log cost matrix statistics for debugging (first few frames)
+        if len(self.tracks) < 10:  # Limit logging to early frames
+            print(f"Gated metric: cost_matrix shape {cost_matrix.shape}, min {cost_matrix_min:.2f}, max {cost_matrix_max:.2f}")
         cost_matrix = linear_assignment.gate_cost_matrix(cost_matrix, tracks, detections, track_indices, detection_indices)
         return cost_matrix, cost_matrix_min, cost_matrix_max
 
@@ -57,6 +59,9 @@ class Tracker:
                                                 detections, candidates, unmatched_detections)
         matches = matches_a + matches_b
         unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
+        # Log matching results for debugging
+        if len(self.tracks) < 10:
+            print(f"Match results: {len(matches)} matches, {len(unmatched_tracks)} unmatched tracks, {len(unmatched_detections)} unmatched detections")
         return matches, unmatched_tracks, unmatched_detections
 
     def update(self, detections):
@@ -77,3 +82,4 @@ class Tracker:
             features += track.features
             targets += [track.track_id for _ in track.features]
         self.metric.partial_fit(np.asarray(features), np.asarray(targets), active_targets)
+        return matches  # Explicitly return matches
