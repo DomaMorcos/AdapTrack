@@ -1,5 +1,4 @@
 import os
-import sys
 import pickle
 import argparse
 import numpy as np
@@ -165,8 +164,8 @@ def main(opt):
                         pre_predict_tracks.append([track.track_id] + coords + [score])
                     else:
                         x1, y1, w, h = bbox
-                        x2, y1 = x1 + w, y1 + h
-                        pre_predict_tracks.append([track.track_id, x1, y1, x2, y1, score])
+                        x2, y2 = x1 + w, y1 + h  # Fixed: Corrected y2 calculation
+                        pre_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
             visualize_tracks(None, pre_predict_tracks, frame_id, "pre_predict", 
                              os.path.join(opt.output_dir, "pre_predict_vis"), opt.vis_interval, opt.image_dir)
 
@@ -182,17 +181,20 @@ def main(opt):
                         post_predict_tracks.append([track.track_id] + coords + [score])
                     else:
                         x1, y1, w, h = bbox
-                        x2, y1 = x1 + w, y1 + h
-                        post_predict_tracks.append([track.track_id, x1, y1, x2, y1, score])
+                        x2, y2 = x1 + w, y1 + h  # Fixed: Corrected y2 calculation
+                        post_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
             visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
                              os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
 
             matches = tracker.update(detections)
 
-            # Update track coordinates based on matches
-            for det_idx, track_idx in matches:
-                track_id = tracker.tracks[track_idx].track_id
-                track_coords[track_id] = det_coords[det_idx]
+            # Handle case where matches is None
+            if matches is not None:
+                for det_idx, track_idx in matches:
+                    track_id = tracker.tracks[track_idx].track_id
+                    track_coords[track_id] = det_coords[det_idx]
+            else:
+                logger.warning(f"Frame {frame_id}: No matches returned from tracker.update()")
 
             results[frame_id] = []
             for track in tracker.tracks:
@@ -204,9 +206,9 @@ def main(opt):
                     else:
                         bbox = track.to_tlwh()
                         x1, y1, w, h = bbox
-                        x2, y1 = x1 + w, y1 + h
-                        results[frame_id].append([track.track_id, x1, y1, x2, y1, score])
-                        track_coords[track.track_id] = [x1, y1, x2, y1]
+                        x2, y2 = x1 + w, y1 + h  # Fixed: Corrected y2 calculation
+                        results[frame_id].append([track.track_id, x1, y1, x2, y2, score])
+                        track_coords[track.track_id] = [x1, y1, x2, y2]
 
             # Prune coordinates for deleted tracks
             active_track_ids = {track.track_id for track in tracker.tracks if not track.is_deleted()}
@@ -223,10 +225,7 @@ def main(opt):
         for frame_id in sorted(results.keys(), key=int):
             for track in results[frame_id]:
                 track_id, x1, y1, x2, y2, score = track
-                x = (x1 + x2) / 2
-                y = (y1 + y2) / 2
-                w = x2 - x1
-                h = y2 - y1
+                x, y, w, h = (x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1
                 f.write(f"{frame_id},{track_id},{x:.2f},{y:.2f},{w:.2f},{h:.2f},{score:.2f}\n")
 
     total_tracks = sum(len(tracks) for tracks in results.values())
