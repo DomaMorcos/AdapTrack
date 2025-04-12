@@ -22,7 +22,11 @@ class Tracker:
         cxcyah = detection.to_cxcyah()
         self.tracks.append(Track(cxcyah, self.next_id, detection.confidence, detection.feature,
                                  conf_thresh=self.conf_thresh, min_len=self.min_len, ema_beta=self.ema_beta, max_age=self.max_age))
+        new_track_id = self.next_id
         self.next_id += 1
+        # Return the new track ID and its initial coordinates
+        x1, y1, x2, y2 = detection.tlbr
+        return new_track_id, [x1, y1, x2, y2]
 
     def predict(self):
         for track in self.tracks:
@@ -39,8 +43,7 @@ class Tracker:
         cost_matrix = self.metric.distance(features, targets)
         cost_matrix_min = np.min(cost_matrix) if cost_matrix.size > 0 else float('inf')
         cost_matrix_max = np.max(cost_matrix) if cost_matrix.size > 0 else float('-inf')
-        # Log cost matrix statistics for debugging (first few frames)
-        if len(self.tracks) < 10:  # Limit logging to early frames
+        if len(self.tracks) < 100:
             print(f"Gated metric: cost_matrix shape {cost_matrix.shape}, min {cost_matrix_min:.2f}, max {cost_matrix_max:.2f}")
         cost_matrix = linear_assignment.gate_cost_matrix(cost_matrix, tracks, detections, track_indices, detection_indices)
         return cost_matrix, cost_matrix_min, cost_matrix_max
@@ -59,20 +62,21 @@ class Tracker:
                                                 detections, candidates, unmatched_detections)
         matches = matches_a + matches_b
         unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
-        # Log matching results for debugging (first 10 frames)
-        if len(self.tracks) < 100:  # Increased limit to see more frames
+        if len(self.tracks) < 100:
             print(f"Match results: {len(matches)} matches, {len(unmatched_tracks)} unmatched tracks, {len(unmatched_detections)} unmatched detections")
         return matches, unmatched_tracks, unmatched_detections
 
     def update(self, detections):
         matches, unmatched_tracks, unmatched_detections = self.match(detections)
+        new_tracks = []  # List of (track_id, coords) for newly initiated tracks
         for track_idx, detection_idx in matches:
             self.tracks[track_idx].update(detections[detection_idx])
         for track_idx in unmatched_tracks:
             self.tracks[track_idx].mark_missed()
         for detection_idx in unmatched_detections:
             if detections[detection_idx].confidence >= self.conf_thresh:
-                self.initiate_track(detections[detection_idx])
+                track_id, coords = self.initiate_track(detections[detection_idx])
+                new_tracks.append((track_id, coords))
         self.tracks = [t for t in self.tracks if not t.is_deleted()]
         active_targets = [t.track_id for t in self.tracks if t.is_confirmed()]
         features, targets = [], []
@@ -82,4 +86,4 @@ class Tracker:
             features += track.features
             targets += [track.track_id for _ in track.features]
         self.metric.partial_fit(np.asarray(features), np.asarray(targets), active_targets)
-        return matches  # Explicitly return matches
+        return matches, new_tracks  # Return matches and new tracks
