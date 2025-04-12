@@ -154,29 +154,28 @@ def main(args):
             thread2.join()
             outputs1, outputs2 = outputs_list
 
+            # Move outputs to CUDA
+            outputs1 = outputs1.cuda()
+            outputs2 = outputs2.cuda()
+
             # Debug raw outputs
             if outputs1.shape[0] > 0:
                 logger.debug(f"Model 1 raw scores: {outputs1[:, 4]}")
             if outputs2.shape[0] > 0:
                 logger.debug(f"Model 2 raw scores: {outputs2[:, 4]}")
 
-            # Sanity check for output shapes
-            if outputs1.shape[1] != 6:
-                logger.error(f"Model 1 output shape {outputs1.shape} does not match expected (N, 6)")
-                outputs1 = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
-            if outputs2.shape[1] != 6:
-                logger.error(f"Model 2 output shape {outputs2.shape} does not match expected (N, 6)")
-                outputs2 = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
-
+            # Expect (N, 5) shape: [x1, y1, x2, y2, conf]
             logger.debug(f"Model 1 output shape: {outputs1.shape}")
             logger.debug(f"Model 2 output shape: {outputs2.shape}")
 
+            # Convert to YOLOX format: [cx, cy, w, h, conf, class_score]
+            # Since we only have one class (pedestrians), duplicate conf as class_score
             if outputs1.shape[0] > 0:
                 outputs1_cxcywh = xyxy2cxcywh(outputs1[:, :4])
                 outputs1_yolox = torch.zeros((outputs1.shape[0], 6), dtype=torch.float32, device='cuda')
                 outputs1_yolox[:, :4] = outputs1_cxcywh
-                outputs1_yolox[:, 4] = outputs1[:, 4]  # Objectness score
-                outputs1_yolox[:, 5] = outputs1[:, 5]  # Class score
+                outputs1_yolox[:, 4] = outputs1[:, 4]  # conf as objectness score
+                outputs1_yolox[:, 5] = outputs1[:, 4]  # conf as class score (single class)
             else:
                 outputs1_yolox = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
 
@@ -184,39 +183,44 @@ def main(args):
                 outputs2_cxcywh = xyxy2cxcywh(outputs2[:, :4])
                 outputs2_yolox = torch.zeros((outputs2.shape[0], 6), dtype=torch.float32, device='cuda')
                 outputs2_yolox[:, :4] = outputs2_cxcywh
-                outputs2_yolox[:, 4] = outputs2[:, 4]
-                outputs2_yolox[:, 5] = outputs2[:, 5]
+                outputs2_yolox[:, 4] = outputs2[:, 4]  # conf as objectness score
+                outputs2_yolox[:, 5] = outputs2[:, 4]  # conf as class score (single class)
             else:
                 outputs2_yolox = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
 
+            # Combine outputs and apply weights
             combined = torch.cat((outputs1_yolox, outputs2_yolox), dim=0)
             if combined.shape[0] > 0:
                 weights = torch.tensor([args.model1_weight] * outputs1_yolox.shape[0] + 
                                       [args.model2_weight] * outputs2_yolox.shape[0], device='cuda')
-                outputs = combined * weights.view(-1, 1)
+                # Only apply weights to scores (columns 4 and 5)
+                outputs = combined.clone()
+                outputs[:, 4:] = outputs[:, 4:] * weights.view(-1, 1)  # Apply weights to conf and class_score
                 logger.debug(f"Combined scores after weighting: {outputs[:, 4]}")
-                outputs = outputs.unsqueeze(0)
+                outputs = outputs.unsqueeze(0)  # Shape: (1, N, 6)
                 logger.info(f"Frame {frame_id}: {combined.shape[0]} detections before NMS")
             else:
                 outputs = torch.zeros((1, 0, 6), device='cuda')
                 logger.info(f"Frame {frame_id}: 0 detections before NMS")
 
-            # Temporarily bypass postprocess to see raw detections
+            # Debug raw detections before postprocess
             logger.debug(f"Raw detections before postprocess: {outputs}")
+
+            # Postprocess (expects [cx, cy, w, h, obj_score, class_score])
             outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
             if outputs[0] is not None:
-                outputs = outputs[0]
+                outputs = outputs[0]  # Shape: (N, 7) [x1, y1, x2, y2, obj_score, class_score, class_pred]
                 logger.info(f"Frame {frame_id}: {outputs.shape[0]} detections after NMS")
             else:
                 outputs = None
                 logger.info(f"Frame {frame_id}: 0 detections after NMS")
 
         if outputs is not None:
-            det = outputs[:, :6].cpu().numpy()
+            det = outputs[:, :6].cpu().numpy()  # [x1, y1, x2, y2, obj_score, class_score]
             det[:, 4] *= det[:, 5]  # Combine objectness and class score
-            det = det[:, :5]  # Keep only [cx, cy, w, h, score]
+            det = det[:, :5]  # Keep only [x1, y1, x2, y2, score]
             scale = min(img_size[0] / orig_size[0], img_size[1] / orig_size[1])
-            det[:, :4] /= scale
+            det[:, :4] /= scale  # Scale back to original resolution
             det_results[video_name][frame_id] = det
         else:
             det_results[video_name][frame_id] = None

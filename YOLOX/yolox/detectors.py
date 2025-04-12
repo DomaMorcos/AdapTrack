@@ -7,11 +7,15 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import numpy as np
 import cv2
-from ensemble_boxes import weighted_boxes_fusion
+from ensemble_boxes import weighted_boxes_fusion 
+
+
 
 from torchvision.models.detection import FasterRCNN
 from torchvision.models.detection.rpn import AnchorGenerator
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+
+
 
 from abc import ABC, abstractmethod
 
@@ -25,24 +29,17 @@ class YoloDetector(Detector):
         self.model = YOLO(yolo_path)
 
     def __call__(self, img):
-        # Get raw predictions from Ultralytics YOLO
-        results = self.model(img, verbose=False)[0]  # Disable verbose output
+        results = self.model(img)[0]  # Let Ultralytics scale to input resolution
         annotations = []
         for box in results.boxes:
             if int(box.cls) == 0:  # Only keep 'person' class (class ID 0)
                 xyxy = box.xyxy[0].tolist()  # [x_min, y_min, x_max, y_max]
                 conf = box.conf[0].item()
-                # YOLOX expects [x1, y1, x2, y2, obj_score, class_score]
-                # Use conf as both objectness score and class score for pedestrian
-                annotations.append(xyxy + [conf, conf])
-        # Convert to tensor and ensure correct shape
-        if annotations:
-            output = torch.tensor(annotations, dtype=torch.float32)
-            print(f"YoloDetector output shape: {output.shape}")  # Debugging
-            return output.cuda()
-        else:
-            print("YoloDetector: No detections, returning zero tensor")
-            return torch.zeros((0, 6), dtype=torch.float32).cuda()
+                annotations.append(xyxy + [conf])
+        return torch.tensor(annotations, dtype=torch.float32) if annotations else torch.zeros((0, 5), dtype=torch.float32)
+
+# EnsembleDetector remains unchanged as it assumes original resolution inputs
+    
 
 # Faster R-CNN Detector (removed conf_threshold)
 class FasterRCNNDetector:
@@ -110,14 +107,15 @@ class FasterRCNNDetector:
             boxes[:, 1] *= scale_y  # y1
             boxes[:, 2] *= scale_x  # x2
             boxes[:, 3] *= scale_y  # y2
-            # YOLOX expects [x1, y1, x2, y2, obj_score, class_score]
-            # Use score as both objectness and class score
-            annotations = torch.cat((boxes, scores.unsqueeze(1), scores.unsqueeze(1)), dim=1).cuda()
+            annotations = torch.cat((boxes, scores.unsqueeze(1)), dim=1)
         else:
-            annotations = torch.zeros((0, 6)).cuda()
+            annotations = torch.zeros((0, 5))
         
-        print(f"FasterRCNNDetector output shape: {annotations.shape}")  # Debugging
         return annotations
+
+
+
+# In detectors.py
 
 class EnsembleDetector(Detector):
     def __init__(self, model1: Detector, model2: Detector, model1_weight=0.7, model2_weight=0.3, iou_thresh=0.6, conf_thresh=0.3):
@@ -137,8 +135,8 @@ class EnsembleDetector(Detector):
 
         # Prepare for WBF
         if len(model1_preds) > 0:
-            yolo_boxes = model1_preds[:, :4].cpu().numpy()
-            yolo_scores = model1_preds[:, 4].cpu().numpy()
+            yolo_boxes = model1_preds[:, :4].numpy()
+            yolo_scores = model1_preds[:, 4].numpy()
             yolo_boxes_normalized = yolo_boxes / np.array([orig_w, orig_h, orig_w, orig_h])
             yolo_labels = np.zeros(len(yolo_scores))  # Class 0 for 'person'
         else:
@@ -147,8 +145,8 @@ class EnsembleDetector(Detector):
             yolo_labels = np.array([])
 
         if len(model2_preds) > 0:
-            other_boxes = model2_preds[:, :4].cpu().numpy()
-            other_scores = model2_preds[:, 4].cpu().numpy()
+            other_boxes = model2_preds[:, :4].numpy()
+            other_scores = model2_preds[:, 4].numpy()
             other_boxes_normalized = other_boxes / np.array([orig_w, orig_h, orig_w, orig_h])
             other_labels = np.zeros(len(other_scores))  # Class 0 for 'person'
         else:
@@ -179,10 +177,8 @@ class EnsembleDetector(Detector):
         # Scale back to original resolution
         if len(boxes) > 0:
             boxes = boxes * np.array([orig_w, orig_h, orig_w, orig_h])
-            # YOLOX expects [x1, y1, x2, y2, obj_score, class_score]
-            annotations = torch.tensor(np.hstack((boxes, scores[:, np.newaxis], scores[:, np.newaxis])), dtype=torch.float32).cuda()
+            annotations = torch.tensor(np.hstack((boxes, scores[:, np.newaxis])), dtype=torch.float32)
         else:
-            annotations = torch.zeros((0, 6), dtype=torch.float32).cuda()
+            annotations = torch.zeros((0, 5), dtype=torch.float32)
 
-        print(f"EnsembleDetector output shape: {annotations.shape}")  # Debugging
         return annotations
