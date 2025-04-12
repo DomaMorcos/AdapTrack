@@ -59,8 +59,8 @@ class Tracker:
                                                 detections, candidates, unmatched_detections)
         matches = matches_a + matches_b
         unmatched_tracks = list(set(unmatched_tracks_a + unmatched_tracks_b))
-        # Log matching results for debugging
-        if len(self.tracks) < 10:
+        # Log matching results for debugging (first 10 frames)
+        if len(self.tracks) < 100:  # Increased limit to see more frames
             print(f"Match results: {len(matches)} matches, {len(unmatched_tracks)} unmatched tracks, {len(unmatched_detections)} unmatched detections")
         return matches, unmatched_tracks, unmatched_detections
 

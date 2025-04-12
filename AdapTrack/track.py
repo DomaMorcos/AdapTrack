@@ -111,7 +111,7 @@ def main(opt):
     tracker = Tracker(
         metric=metric,
         vid_name=opt.sequence_name,
-        max_distance=0.6,  # Increased to allow more matches
+        max_distance=1.0,  # Increased to allow more matches
         max_iou_distance=opt.max_iou_distance,
         min_len=opt.min_len,
         max_age=opt.max_age,
@@ -142,13 +142,19 @@ def main(opt):
             # Log feature statistics before normalization
             if frame_id <= 3:
                 logger.info(f"Frame {frame_id}: Feature shape {features.shape}, mean {np.mean(features):.2f}, std {np.std(features):.2f}, min {np.min(features):.2f}, max {np.max(features):.2f}")
+                # Log norm of first few feature vectors
+                norms = np.linalg.norm(features, axis=1)
+                logger.info(f"Frame {frame_id}: Feature norms (first 5) {norms[:5]}")
 
-            # Normalize features to improve matching
-            features = features / (np.linalg.norm(features, axis=1, keepdims=True) + 1e-6)  # L2 normalization
+            # Normalize features to unit norm
+            norms = np.linalg.norm(features, axis=1, keepdims=True)
+            features = np.where(norms > 1e-6, features / (norms + 1e-6), features)  # Avoid division by zero
 
             # Log feature statistics after normalization
             if frame_id <= 3:
                 logger.info(f"Frame {frame_id}: Normalized features - mean {np.mean(features):.2f}, std {np.std(features):.2f}, min {np.min(features):.2f}, max {np.max(features):.2f}")
+                norms = np.linalg.norm(features, axis=1)
+                logger.info(f"Frame {frame_id}: Normalized feature norms (first 5) {norms[:5]}")
 
             visualize_xyxy_detections(None, dets, frame_id, os.path.join(opt.output_dir, "raw_dets_vis"), 
                                      opt.vis_interval, "raw_dets", opt.image_dir)
@@ -178,6 +184,7 @@ def main(opt):
                         x1, y1, w, h = bbox
                         x2, y2 = x1 + w, y1 + h
                         pre_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
+                        track_coords[track.track_id] = [x1, y1, x2, y2]  # Initialize coords for new tracks
             visualize_tracks(None, pre_predict_tracks, frame_id, "pre_predict", 
                              os.path.join(opt.output_dir, "pre_predict_vis"), opt.vis_interval, opt.image_dir)
 
@@ -195,6 +202,7 @@ def main(opt):
                         x1, y1, w, h = bbox
                         x2, y2 = x1 + w, y1 + h
                         post_predict_tracks.append([track.track_id, x1, y1, x2, y2, score])
+                        track_coords[track.track_id] = [x1, y1, x2, y2]  # Initialize coords for new tracks
             visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
                              os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
 
@@ -217,7 +225,7 @@ def main(opt):
                         x1, y1, w, h = bbox
                         x2, y2 = x1 + w, y1 + h
                         results[frame_id].append([track.track_id, x1, y1, x2, y2, score])
-                        track_coords[track.track_id] = [x1, y1, x2, y2]
+                        track_coords[track.track_id] = [x1, y1, x2, y2]  # Initialize coords for new tracks
 
             # Prune coordinates for deleted tracks
             active_track_ids = {track.track_id for track in tracker.tracks if not track.is_deleted()}
