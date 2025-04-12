@@ -5,12 +5,10 @@ import AFLink.config as cfg
 from torch.utils.data import Dataset
 from random import randint, normalvariate
 
-
-SEQ = {'train': ['MOT17-02-FRCNN', 'MOT17-04-FRCNN', 'MOT17-05-FRCNN', 'MOT17-09-FRCNN',
-                 'MOT17-10-FRCNN', 'MOT17-11-FRCNN', 'MOT17-13-FRCNN'],
-       'test': ['MOT17-01-FRCNN', 'MOT17-03-FRCNN', 'MOT17-06-FRCNN', 'MOT17-07-FRCNN',
-                'MOT17-08-FRCNN', 'MOT17-12-FRCNN', 'MOT17-14-FRCNN']}
-
+SEQ = {
+    'train': ['02', '03', '05'],
+    'test': ['02', '03', '05']
+}
 
 class LinkData(Dataset):
     def __init__(self, root, mode='train', minLen=cfg.model_minLen, inputLen=cfg.model_inputLen):
@@ -26,10 +24,15 @@ class LinkData(Dataset):
 
     def initialize(self):
         id2info = dict()
-        for seqid, seq in enumerate(SEQ['train'], start=1):
-            path_gt = join(self.root, '{}/gt/gt_{}_half.txt'.format(seq, self.mode))
+        seq_list = SEQ['train'] if self.mode == 'train' else SEQ['test']
+        for seqid, seq in enumerate(seq_list, start=1):
+            gt_file = 'gt_train_half.txt' if self.mode == 'train' else 'gt_val_half.txt'
+            path_gt = join(self.root, f'{seq}/gt/{gt_file}')
+            if not os.path.exists(path_gt):
+                print(f"Warning: {path_gt} not found")
+                continue
             gts = np.loadtxt(path_gt, delimiter=',')
-            gts = gts[(gts[:, 6] == 1) * (gts[:, 7] == 1)]
+            gts = gts[gts[:, 7] == 1]
             ids = set(gts[:, 1])
 
             for objid in ids:
@@ -60,11 +63,9 @@ class LinkData(Dataset):
         return x
 
     def transform(self, x1, x2):
-        # fill or cut
         x1 = self.fill_or_cut(x1, True)
         x2 = self.fill_or_cut(x2, False)
 
-        # min-max normalization
         min_ = np.concatenate((x1, x2), axis=0).min(axis=0)
         max_ = np.concatenate((x1, x2), axis=0).max(axis=0)
         subtractor = (max_ + min_) / 2
@@ -72,11 +73,9 @@ class LinkData(Dataset):
         x1 = (x1 - subtractor) / divisor
         x2 = (x2 - subtractor) / divisor
 
-        # numpy to torch
         x1 = torch.tensor(x1, dtype=torch.float)
         x2 = torch.tensor(x2, dtype=torch.float)
 
-        # unsqueeze channel=1
         x1 = x1.unsqueeze(dim=0)
         x2 = x2.unsqueeze(dim=0)
         return x1, x2
