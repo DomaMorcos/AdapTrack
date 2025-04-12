@@ -5,9 +5,9 @@ from torch import nn
 class TemporalBlock(nn.Module):
     def __init__(self, cin, cout):
         super(TemporalBlock, self).__init__()
-        self.conv = nn.Conv2d(cin, cout, kernel_size=(3, 1), stride=1)  # cin to cout
+        self.conv = nn.Conv2d(cin, cout, kernel_size=(3, 1), stride=1, padding=(1, 0))  # Added padding
         self.relu = nn.ReLU(inplace=True)
-        self.bnf = nn.BatchNorm1d(cout)  # Match cout
+        self.bnf = nn.BatchNorm1d(cout)
         self.bnx = nn.BatchNorm1d(cout)
         self.bny = nn.BatchNorm1d(cout)
 
