@@ -135,6 +135,9 @@ def main(args):
         if args.fp16:
             img_tensor_np = img_tensor_np.half()
 
+        # Debug input tensor range
+        print(f"Frame {frame_id} - img_tensor_np min: {img_tensor_np.min().item()}, max: {img_tensor_np.max().item()}")
+
         with torch.no_grad():
             if frame_id == 1:  # Warm-up
                 _ = detector1(img_tensor_np)
@@ -150,6 +153,12 @@ def main(args):
             thread1.join()
             thread2.join()
             outputs1, outputs2 = outputs_list
+
+            # Debug raw outputs
+            if outputs1.shape[0] > 0:
+                logger.debug(f"Model 1 raw scores: {outputs1[:, 4]}")
+            if outputs2.shape[0] > 0:
+                logger.debug(f"Model 2 raw scores: {outputs2[:, 4]}")
 
             # Sanity check for output shapes
             if outputs1.shape[1] != 6:
@@ -185,12 +194,15 @@ def main(args):
                 weights = torch.tensor([args.model1_weight] * outputs1_yolox.shape[0] + 
                                       [args.model2_weight] * outputs2_yolox.shape[0], device='cuda')
                 outputs = combined * weights.view(-1, 1)
+                logger.debug(f"Combined scores after weighting: {outputs[:, 4]}")
                 outputs = outputs.unsqueeze(0)
                 logger.info(f"Frame {frame_id}: {combined.shape[0]} detections before NMS")
             else:
                 outputs = torch.zeros((1, 0, 6), device='cuda')
                 logger.info(f"Frame {frame_id}: 0 detections before NMS")
 
+            # Temporarily bypass postprocess to see raw detections
+            logger.debug(f"Raw detections before postprocess: {outputs}")
             outputs = postprocess(outputs, num_classes=1, conf_thre=args.confthre, nms_thre=args.nmsthre)
             if outputs[0] is not None:
                 outputs = outputs[0]
