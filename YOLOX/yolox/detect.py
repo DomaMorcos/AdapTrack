@@ -11,6 +11,7 @@ from yolox.data.data_augment import ValTransform
 from yolox.utils import postprocess
 from detectors import YoloDetector
 from configparser import ConfigParser
+import threading
 
 def make_parser():
     parser = argparse.ArgumentParser("YOLOX MOT Detection with Ensemble")
@@ -46,8 +47,8 @@ def load_seqinfo(seqinfo_path):
 def xyxy2cxcywh(boxes):
     cx = (boxes[:, 0] + boxes[:, 2]) / 2
     cy = (boxes[:, 1] + boxes[:, 3]) / 2
-    w = boxes[:, 2] - boxes[:, 0]
-    h = boxes[:, 3] - boxes[:, 1]
+    w = (boxes[:, 2] - boxes[:, 0])
+    h = (boxes[:, 3] - boxes[:, 1])
     return torch.stack((cx, cy, w, h), dim=1)
 
 def visualize_detections(img, dets, frame_id, output_dir, vis_interval):
@@ -67,6 +68,10 @@ def visualize_detections(img, dets, frame_id, output_dir, vis_interval):
     os.makedirs(output_dir, exist_ok=True)
     cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}.jpg"), img_vis)
     logger.info(f"Saved detection visualization for frame {frame_id}")
+
+def run_detector(detector, img_tensor_np, output_list, index):
+    with torch.no_grad():
+        output_list[index] = detector(img_tensor_np)
 
 def main(args):
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
@@ -136,24 +141,42 @@ def main(args):
                 _ = detector2(img_tensor_np)
                 torch.cuda.synchronize()
 
-            outputs1 = detector1(img_tensor_np)
-            outputs2 = detector2(img_tensor_np)
+            # Run detectors in parallel
+            outputs_list = [None, None]
+            thread1 = threading.Thread(target=run_detector, args=(detector1, img_tensor_np, outputs_list, 0))
+            thread2 = threading.Thread(target=run_detector, args=(detector2, img_tensor_np, outputs_list, 1))
+            thread1.start()
+            thread2.start()
+            thread1.join()
+            thread2.join()
+            outputs1, outputs2 = outputs_list
+
+            # Sanity check for output shapes
+            if outputs1.shape[1] != 6:
+                logger.error(f"Model 1 output shape {outputs1.shape} does not match expected (N, 6)")
+                outputs1 = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
+            if outputs2.shape[1] != 6:
+                logger.error(f"Model 2 output shape {outputs2.shape} does not match expected (N, 6)")
+                outputs2 = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
+
+            logger.debug(f"Model 1 output shape: {outputs1.shape}")
+            logger.debug(f"Model 2 output shape: {outputs2.shape}")
 
             if outputs1.shape[0] > 0:
                 outputs1_cxcywh = xyxy2cxcywh(outputs1[:, :4])
                 outputs1_yolox = torch.zeros((outputs1.shape[0], 6), dtype=torch.float32, device='cuda')
-                outputs1_yolox[:, :4] = outputs1_cxcywh.cuda()
-                outputs1_yolox[:, 4] = outputs1[:, 4].cuda()  # Objectness score
-                outputs1_yolox[:, 5] = outputs1[:, 5].cuda()  # Class score
+                outputs1_yolox[:, :4] = outputs1_cxcywh
+                outputs1_yolox[:, 4] = outputs1[:, 4]  # Objectness score
+                outputs1_yolox[:, 5] = outputs1[:, 5]  # Class score
             else:
                 outputs1_yolox = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
 
             if outputs2.shape[0] > 0:
                 outputs2_cxcywh = xyxy2cxcywh(outputs2[:, :4])
                 outputs2_yolox = torch.zeros((outputs2.shape[0], 6), dtype=torch.float32, device='cuda')
-                outputs2_yolox[:, :4] = outputs2_cxcywh.cuda()
-                outputs2_yolox[:, 4] = outputs2[:, 4].cuda()
-                outputs2_yolox[:, 5] = outputs2[:, 5].cuda()
+                outputs2_yolox[:, :4] = outputs2_cxcywh
+                outputs2_yolox[:, 4] = outputs2[:, 4]
+                outputs2_yolox[:, 5] = outputs2[:, 5]
             else:
                 outputs2_yolox = torch.zeros((0, 6), dtype=torch.float32, device='cuda')
 
