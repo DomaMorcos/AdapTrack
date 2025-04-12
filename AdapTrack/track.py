@@ -128,7 +128,7 @@ def main(opt):
         dets = frame_data[frame_id]
         if dets is None or dets.shape[0] == 0:
             tracker.predict()
-            matches, new_tracks = tracker.update([])
+            matches, new_tracks, matched_track_ids = tracker.update([])
             # Initialize track_coords for new tracks
             for track_id, coords in new_tracks:
                 track_coords[track_id] = coords
@@ -200,12 +200,12 @@ def main(opt):
             visualize_tracks(None, post_predict_tracks, frame_id, "post_predict", 
                              os.path.join(opt.output_dir, "post_predict_vis"), opt.vis_interval, opt.image_dir)
 
-            matches, new_tracks = tracker.update(detections)
+            matches, new_tracks, matched_track_ids = tracker.update(detections)
 
             # Debug: Log new tracks and matched track IDs
             if frame_id <= 5:
                 logger.info(f"Frame {frame_id}: New tracks {[(tid, coords) for tid, coords in new_tracks]}")
-                logger.info(f"Frame {frame_id}: Matched track IDs {[tracker.tracks[track_idx].track_id for track_idx, det_idx in matches]}")
+                logger.info(f"Frame {frame_id}: Matched track IDs {matched_track_ids}")
 
             # Debug: Log state of track 48
             if frame_id <= 5:

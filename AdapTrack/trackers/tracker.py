@@ -76,6 +76,10 @@ class Tracker:
             if detections[detection_idx].confidence >= self.conf_thresh:
                 track_id, coords = self.initiate_track(detections[detection_idx])
                 new_tracks.append((track_id, coords))
+        
+        # Compute matched track IDs before deletion
+        matched_track_ids = [self.tracks[track_idx].track_id for track_idx, _ in matches]
+        
         # Debug: Log tracks before and after deletion
         if len(self.tracks) < 100:
             print(f"Before deletion: {[t.track_id for t in self.tracks]}")
@@ -90,4 +94,4 @@ class Tracker:
             features += track.features
             targets += [track.track_id for _ in track.features]
         self.metric.partial_fit(np.asarray(features), np.asarray(targets), active_targets)
-        return matches, new_tracks  # Return matches and new tracks
+        return matches, new_tracks, matched_track_ids  # Return matches, new tracks, and matched track IDs
