@@ -28,7 +28,7 @@ class LinkData(Dataset):
         seq_list = SEQ['train'] if self.mode == 'train' else SEQ['test']
         for seqid, seq in enumerate(seq_list, start=1):
             gt_file = 'gt_train_half.txt' if self.mode == 'train' else 'gt_val_half.txt'
-            path_gt = os.join(self.root, f'{seq}/gt/{gt_file}')
+            path_gt = os.path.join(self.root, f'{seq}/gt/{gt_file}')
             if not os.path.exists(path_gt):
                 print(f"Warning: {path_gt} not found")
                 continue
