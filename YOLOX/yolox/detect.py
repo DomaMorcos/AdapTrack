@@ -13,7 +13,7 @@ from detectors import YoloDetector
 from configparser import ConfigParser
 
 def make_parser():
-    parser = argparse.ArgumentParser("YOLOX MOT Detection with Ensemble (No JSON)")
+    parser = argparse.ArgumentParser("YOLOX MOT Detection with Ensemble")
     parser.add_argument("--dataset_path", type=str, required=True, help="Path to MOT image directory (e.g., /img1)")
     parser.add_argument("--seqinfo_path", type=str, default=None, help="Path to seqinfo.ini (defaults to ../seqinfo.ini)")
     parser.add_argument("--model1_path", type=str, required=True, help="Path to YOLO12l weights")
@@ -26,6 +26,7 @@ def make_parser():
     parser.add_argument("--nmsthre", type=float, default=0.5, help="NMS IoU threshold")
     parser.add_argument("--img_size", type=str, default="608,1088", help="Input image size (height,width)")
     parser.add_argument("--fp16", action="store_true", help="Use half-precision inference")
+    parser.add_argument("--vis_interval", type=int, default=10, help="Save visualization every N frames")
     return parser
 
 def load_seqinfo(seqinfo_path):
@@ -48,6 +49,24 @@ def xyxy2cxcywh(boxes):
     w = boxes[:, 2] - boxes[:, 0]
     h = boxes[:, 3] - boxes[:, 1]
     return torch.stack((cx, cy, w, h), dim=1)
+
+def visualize_detections(img, dets, frame_id, output_dir, vis_interval):
+    if frame_id % vis_interval != 0:
+        return
+    if dets is None or len(dets) == 0:
+        return
+    img_vis = img.copy()
+    for det in dets:
+        x, y, w, h, score = det[:5]
+        x1 = int(x - w/2)
+        y1 = int(y - h/2)
+        x2 = int(x + w/2)
+        y2 = int(y + h/2)
+        cv2.rectangle(img_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(img_vis, f"{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    os.makedirs(output_dir, exist_ok=True)
+    cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}.jpg"), img_vis)
+    logger.info(f"Saved detection visualization for frame {frame_id}")
 
 def main(args):
     logger.info(f"CUDA available: {torch.cuda.is_available()}")
@@ -87,6 +106,7 @@ def main(args):
     logger.info(f"Detector2 device: {next(detector2.model.parameters()).device}")
 
     det_results = {video_name: {}}
+    vis_dir = os.path.join(args.output_folder, "det_vis")
     for frame_id in range(1, seq_length + 1):
         img_path = os.path.join(args.dataset_path, f"{frame_id:06d}{im_ext}")
         if not os.path.exists(img_path):
@@ -166,6 +186,8 @@ def main(args):
         else:
             det_results[video_name][frame_id] = None
 
+        # Visualize detections
+        visualize_detections(img, det_results[video_name][frame_id], frame_id, vis_dir, args.vis_interval)
         logger.info(f"Processed frame {frame_id} for {video_name}")
 
     os.makedirs(args.output_folder, exist_ok=True)
