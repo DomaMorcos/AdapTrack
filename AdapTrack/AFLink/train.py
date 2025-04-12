@@ -1,7 +1,7 @@
 import os
 import torch
 from torch import nn
-import config as cfg
+import config as cfg # 8AYARTAHA WALLAHY
 from torch.optim import Adam
 from datetime import datetime
 from os.path import join, exists
