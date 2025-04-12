@@ -231,15 +231,15 @@ def main(opt):
             for track in tracker.tracks:
                 if track.is_confirmed() and track.time_since_update <= 1:
                     score = track.confidence if hasattr(track, 'confidence') else 1.0
-                    coords = track_coords.get(track.track_id, None)
-                    if coords:
-                        results[frame_id].append([track.track_id] + coords + [score])
-                    else:
+                    track_id = track.track_id
+                    if track_id not in track_coords:
                         bbox = track.to_tlwh()
                         x1, y1, w, h = bbox
                         x2, y2 = x1 + w, y1 + h
-                        results[frame_id].append([track.track_id, x1, y1, x2, y2, score])
-                        track_coords[track.track_id] = [x1, y1, x2, y2]
+                        track_coords[track_id] = [x1, y1, x2, y2]
+                        logger.warning(f"Frame {frame_id}: Track ID {track_id} not in track_coords during results, initialized with predicted coords")
+                    coords = track_coords[track_id]
+                    results[frame_id].append([track.track_id] + coords + [score])
 
             # Prune coordinates for deleted tracks
             active_track_ids = {track.track_id for track in tracker.tracks if not track.is_deleted()}

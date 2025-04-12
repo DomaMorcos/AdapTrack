@@ -24,7 +24,6 @@ class Tracker:
                                  conf_thresh=self.conf_thresh, min_len=self.min_len, ema_beta=self.ema_beta, max_age=self.max_age))
         new_track_id = self.next_id
         self.next_id += 1
-        # Return the new track ID and its initial coordinates
         x1, y1, x2, y2 = detection.tlbr
         return new_track_id, [x1, y1, x2, y2]
 
@@ -77,7 +76,12 @@ class Tracker:
             if detections[detection_idx].confidence >= self.conf_thresh:
                 track_id, coords = self.initiate_track(detections[detection_idx])
                 new_tracks.append((track_id, coords))
+        # Debug: Log tracks before and after deletion
+        if len(self.tracks) < 100:
+            print(f"Before deletion: {[t.track_id for t in self.tracks]}")
         self.tracks = [t for t in self.tracks if not t.is_deleted()]
+        if len(self.tracks) < 100:
+            print(f"After deletion: {[t.track_id for t in self.tracks]}")
         active_targets = [t.track_id for t in self.tracks if t.is_confirmed()]
         features, targets = [], []
         for track in self.tracks:
