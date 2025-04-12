@@ -107,9 +107,14 @@ def visualize_features(img, det_array, frame_id, output_dir, vis_interval):
         return
     img_vis = img.copy()
     for det in det_array:
-        x, y, w, h, score = det[:5]
+        x1, y1, x2, y2, score = det[:5]
         emb = det[5:]
         emb_norm = np.linalg.norm(emb)
+        # Convert [x1, y1, x2, y2] to [x, y, w, h] for visualization
+        x = (x1 + x2) / 2
+        y = (y1 + y2) / 2
+        w = x2 - x1
+        h = y2 - y1
         x1 = int(x - w/2)
         y1 = int(y - h/2)
         x2 = int(x + w/2)
@@ -136,27 +141,28 @@ def main(args):
     updated_detections = {}
     vis_dir = os.path.join(os.path.dirname(args.output_path), "feat_vis")
     for vid_name in detections:
+        updated_detections[vid_name] = {}
         for frame_id, det_array in detections[vid_name].items():
             frame_id = int(frame_id)
             if det_array is None or det_array.shape[0] == 0:
-                updated_detections[frame_id] = det_array
+                updated_detections[vid_name][frame_id] = det_array
                 continue
 
             img_path = os.path.join(args.image_dir, f"{frame_id:0{args.frame_padding}d}{args.image_ext}")
             img = cv2.imread(img_path)
             if img is None:
                 print(f"Warning: Failed to load {img_path}")
-                updated_detections[frame_id] = det_array
+                updated_detections[vid_name][frame_id] = det_array
                 continue
 
             embedding = embedder.compute_embedding(img, det_array[:, :4])
             if embedding.shape[0] != det_array.shape[0]:
                 print(f"Warning: Embedding shape mismatch for frame {frame_id}. Expected {det_array.shape[0]}, got {embedding.shape[0]}")
                 continue
-            updated_detections[frame_id] = np.concatenate([det_array[:, :5], embedding], axis=1)
+            updated_detections[vid_name][frame_id] = np.concatenate([det_array[:, :5], embedding], axis=1)
 
             # Visualize features
-            visualize_features(img, updated_detections[frame_id], frame_id, vis_dir, args.vis_interval)
+            visualize_features(img, updated_detections[vid_name][frame_id], frame_id, vis_dir, args.vis_interval)
             print(f"Processed frame {frame_id}", flush=True)
 
     os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
