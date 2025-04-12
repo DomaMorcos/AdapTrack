@@ -68,7 +68,7 @@ def visualize_xyxy_detections(img, dets, frame_id, output_dir, vis_interval, sta
         score = det[4].cpu().numpy() if len(det) > 4 else 0.0
         cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(vis_img, f"{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        # logger.debug(f"{stage_name} detection {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
+        logger.debug(f"{stage_name} detection {i}: x1={x1}, y1={y1}, x2={x2}, y2={y2}, score={score:.2f}")
     os.makedirs(output_dir, exist_ok=True)
     cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}_{stage_name}.jpg"), vis_img)
     logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
@@ -93,7 +93,7 @@ def visualize_cxcywh_detections(img, dets, frame_id, output_dir, vis_interval, s
         y2 = int(cy + h/2)
         cv2.rectangle(vis_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(vis_img, f"{score:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        # logger.debug(f"{stage_name} detection {i}: cx={cx}, cy={cy}, w={w}, h={h}, score={score:.2f}")
+        logger.debug(f"{stage_name} detection {i}: cx={cx}, cy={cy}, w={w}, h={h}, score={score:.2f}")
     os.makedirs(output_dir, exist_ok=True)
     cv2.imwrite(os.path.join(output_dir, f"frame_{frame_id:06d}_{stage_name}.jpg"), vis_img)
     logger.info(f"Saved {stage_name} visualization for frame {frame_id}")
@@ -126,7 +126,7 @@ def main(args):
     seq_length = seq_info["seqLength"]
     orig_size = (seq_info["imHeight"], seq_info["imWidth"])  # e.g., 1080x1920
     im_ext = seq_info["imExt"]
-    # logger.info(f"Original image size: {orig_size}, Model 1 image size: {model1_img_size}, Model 2 image size: {model2_img_size}")
+    logger.info(f"Original image size: {orig_size}, Model 1 image size: {model1_img_size}, Model 2 image size: {model2_img_size}")
 
     preproc = ValTransform(rgb_means=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
 
@@ -284,10 +284,10 @@ def main(args):
                 outputs[:, 4:] = outputs[:, 4:] * weights.view(-1, 1)  # Apply weights to conf and class_score
                 # logger.debug(f"Combined scores after weighting: {outputs[:, 4]}")
                 outputs = outputs.unsqueeze(0)  # Shape: (1, N, 6)
-                # logger.info(f"Frame {frame_id}: {combined.shape[0]} detections before NMS")
+                logger.info(f"Frame {frame_id}: {combined.shape[0]} detections before NMS")
             else:
                 outputs = torch.zeros((1, 0, 6), device='cuda')
-                # logger.info(f"Frame {frame_id}: 0 detections before NMS")
+                logger.info(f"Frame {frame_id}: 0 detections before NMS")
 
             # Visualize after weighting (in original image space: 1920x1080)
             visualize_cxcywh_detections(img, outputs[0], frame_id, vis_dir, args.vis_interval, "after_weighting", img_size=None)
