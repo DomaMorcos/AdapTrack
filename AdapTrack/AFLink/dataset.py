@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import os
 from os.path import join
-import config as cfg
+import AFLink.config as cfg
 from torch.utils.data import Dataset
 from random import randint, normalvariate
 
