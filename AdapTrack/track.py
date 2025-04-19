@@ -6,6 +6,7 @@ import warnings
 import numpy as np
 import argparse
 import time
+import json
 from trackers import metrics
 from trackers.tracker import Tracker
 from trackers.units import Detection
@@ -33,10 +34,11 @@ def make_parser():
     parser.add_argument("--aflink_thrT_max", type=int, default=30, help="Max time gap for AFLink linking")
     parser.add_argument("--aflink_thrS", type=int, default=75, help="Spatial threshold for AFLink")
     parser.add_argument("--aflink_thrP", type=float, default=0.05, help="Probability threshold for AFLink")
+    parser.add_argument("--reid_config", type=str, default='{"dataset": "mot20", "embedding_dim": 256}', help="JSON config for ReID, including embedding_dim")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
     return parser
 
-def create_detections(det_feat, conf_thresh, expected_feature_dim=256):
+def create_detections(det_feat, conf_thresh, expected_feature_dim):
     detections = []
     if det_feat is None or det_feat.shape[0] == 0:
         print("Debug: No detections in frame")
@@ -59,7 +61,7 @@ def run_tracker(sequence_name, det_feat, output_path, args):
     results = []
 
     for frame_idx in sorted(det_feat.keys()):
-        detections = create_detections(det_feat[frame_idx], args.conf_thresh)
+        detections = create_detections(det_feat[frame_idx], args.conf_thresh, args.reid_config["embedding_dim"])
         tracker.camera_update(frame_idx)
         tracker.predict()
         tracker.update(detections)
@@ -107,6 +109,14 @@ def main():
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(args.seed)
+
+    # Parse reid_config
+    try:
+        args.reid_config = json.loads(args.reid_config)
+        if "embedding_dim" not in args.reid_config:
+            raise ValueError("reid_config must include 'embedding_dim'")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid reid_config JSON: {e}")
 
     with open(args.det_feat_path, 'rb') as f:
         det_feat = pickle.load(f)
