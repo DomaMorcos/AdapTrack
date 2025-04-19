@@ -25,7 +25,7 @@ class ReIDExtractor:
         raise NotImplementedError("Subclasses must implement compute_embedding")
 
 class FastReIDExtractor(ReIDExtractor):
-    """Implementation using your EmbeddingComputer."""
+    """Implementation using FastReID EmbeddingComputer."""
     def __init__(self, model_path, config=None):
         super().__init__(model_path, config)
         from fastreid.emb_computer import EmbeddingComputer
@@ -42,7 +42,7 @@ class OSNetExtractor(ReIDExtractor):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = OSNetReID(embedding_dim=config.get("embedding_dim", 256))
         if model_path and os.path.exists(model_path):
-            self.model.load_state_dict(torch.load(model_path, weights_only=True))  # Added weights_only=True for safety
+            self.model.load_state_dict(torch.load(model_path, weights_only=True))
         self.model = self.model.to(self.device)
         self.model.eval()
         self.crop_size = (128, 384)  # Standard size for person ReID
@@ -69,7 +69,7 @@ class OSNetExtractor(ReIDExtractor):
             crops.append(crop)
 
         if not crops:
-            return np.zeros((len(boxes), 256))
+            return np.zeros((len(boxes), self.config.get("embedding_dim", 256)))
 
         # Process in batch
         batch = torch.cat(crops, dim=0).to(self.device)
@@ -109,10 +109,11 @@ def make_parser():
     parser.add_argument("--output_path", type=str, required=True, help="Path to save detections with features")
     parser.add_argument("--image_dir", type=str, required=True, help="Directory with images (e.g., frame_000001.jpg)")
     parser.add_argument("--reid_model", type=str, default=None, help="Path to ReID model weights")
-    parser.add_argument("--reid_class", type=str, default="OSNetExtractor", help="ReID extractor class")
+    parser.add_argument("--reid_class", type=str, default="OSNetExtractor", help="ReID extractor class (OSNetExtractor or FastReIDExtractor)")
     parser.add_argument("--reid_config", type=str, default='{"dataset": "mot20", "embedding_dim": 256}', help="JSON config for ReID")
     parser.add_argument("--image_ext", type=str, default=".jpg", help="Image file extension")
     parser.add_argument("--frame_padding", type=int, default=6, help="Zero-padding for frame IDs")
+    parser.add_argument("--frame_prefix", type=str, default="frame_", help="Prefix for frame filenames (e.g., 'frame_')")
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
     return parser
 
@@ -121,8 +122,15 @@ def main(args):
     np.random.seed(args.seed)
     os.environ["PYTHONHASHSEED"] = str(args.seed)
 
+    # Debug: Print all arguments
+    print("Arguments received:")
+    for arg, value in vars(args).items():
+        print(f"{arg}: {value}")
+
     # Load ReID extractor
     reid_config = json.loads(args.reid_config)
+    if args.reid_class not in globals():
+        raise ValueError(f"Invalid reid_class: {args.reid_class}. Must be 'OSNetExtractor' or 'FastReIDExtractor'")
     reid_class = globals()[args.reid_class]
     embedder = reid_class(model_path=args.reid_model, config=reid_config)
     print(f"Using ReID model: {args.reid_model} with class {args.reid_class}")
@@ -138,7 +146,7 @@ def main(args):
             updated_detections[frame_id] = detections[frame_id]
             continue
 
-        # Load image with configurable naming
+        # Load image with hardcoded frame_ prefix
         img_path = os.path.join(args.image_dir, f"frame_{frame_id:0{args.frame_padding}d}{args.image_ext}")
         img = cv2.imread(img_path)
         if img is None:
