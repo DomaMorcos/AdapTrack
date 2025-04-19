@@ -36,7 +36,7 @@ def make_parser():
     parser.add_argument("--seed", type=int, default=10000, help="Random seed")
     return parser
 
-def create_detections(det_feat, conf_thresh):
+def create_detections(det_feat, conf_thresh, expected_feature_dim=256):
     detections = []
     if det_feat is None or det_feat.shape[0] == 0:
         print("Debug: No detections in frame")
@@ -44,6 +44,9 @@ def create_detections(det_feat, conf_thresh):
     for row in det_feat:
         bbox, confidence, feature = row[:4], row[4], row[5:]
         if confidence < conf_thresh:
+            continue
+        if feature.shape[0] != expected_feature_dim:
+            print(f"Warning: Skipping detection with feature dimension {feature.shape[0]}, expected {expected_feature_dim}")
             continue
         detections.append(Detection(bbox, confidence, feature))
     return detections
